@@ -21,19 +21,19 @@ class VirtualKeyboard:
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
             ],
             "AZERTY": [
                 ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
                 ["W", "X", "C", "V", "B", "N", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
             ],
             "INDONESIA": [
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
             ]
         }
         self.current_layout = "QWERTY"
@@ -102,6 +102,20 @@ class VirtualKeyboard:
             "typing": TypingGame(),
             "memory": MemoryGame()
         }
+        self.draw_mode = False
+        self.drawing_canvas = None
+        self.current_color = (255, 255, 255)  
+        self.colors = [
+            (255, 255, 255),  
+            (255, 0, 0),    
+            (0, 255, 0),     
+            (0, 0, 255),      
+            (255, 255, 0),   
+            (255, 0, 255),    
+            (0, 255, 255)    
+        ]
+        self.brush_size = 5
+        self.last_point = None
         self.create_sound_effects()
 
     def create_sound_effects(self):
@@ -151,6 +165,17 @@ class VirtualKeyboard:
     def toggle_game_mode(self):
         self.game_mode = not self.game_mode
         self.current_game = "menu" if self.game_mode else None
+        self.draw_mode = False
+
+    def toggle_draw_mode(self):
+        self.draw_mode = not self.draw_mode
+        self.game_mode = False
+        if self.draw_mode:
+            h, w = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            self.drawing_canvas = np.zeros((h, w, 3), dtype=np.uint8)
+            self.last_point = None
+        else:
+            self.drawing_canvas = None
 
     def get_curved_position(self, base_x, base_y, hand_center, curve_intensity=0.3):
         if hand_center is None:
@@ -188,6 +213,8 @@ class VirtualKeyboard:
             self.adjust_size(False)
         elif key == "Game":
             self.toggle_game_mode()
+        elif key == "Draw":
+            self.toggle_draw_mode()
 
     def get_text_size(self, text, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1, thickness=2):
         return cv2.getTextSize(text, font, font_scale, thickness)[0]
@@ -262,6 +289,47 @@ class VirtualKeyboard:
                 self.game_selection_timer = time.time()
         return overlay
 
+    def draw_color_picker(self, overlay, finger_pos):
+        theme = self.get_current_theme()
+        draw_area = (200, 100, 600, 400)
+        button_width, button_height = 50, 50
+        start_x = draw_area[0] + 50
+        start_y = draw_area[1] + 100
+        for i, color in enumerate(self.colors):
+            col = i % 4
+            row = i // 4
+            btn_x = start_x + col * (button_width + 20)
+            btn_y = start_y + row * (button_height + 20)
+            is_touching = finger_pos and self.is_finger_touching(finger_pos[0], finger_pos[1], btn_x, btn_y, button_width, button_height)
+            cv2.rectangle(overlay, (btn_x, btn_y), (btn_x + button_width, btn_y + button_height), color, -1)
+            cv2.rectangle(overlay, (btn_x, btn_y), (btn_x + button_width, btn_y + button_height), theme["border_color"], 2)
+            if is_touching and hasattr(self, 'color_selection_timer'):
+                if time.time() - self.color_selection_timer > 0.5:
+                    self.current_color = color
+                    self.color_selection_timer = 0
+            elif is_touching:
+                self.color_selection_timer = time.time()
+        # Draw exit button
+        exit_x, exit_y = draw_area[2] - 100, draw_area[1] + 10
+        is_touching_exit = finger_pos and self.is_finger_touching(finger_pos[0], finger_pos[1], exit_x, exit_y, 80, 40)
+        btn_color = theme["key_hover"] if is_touching_exit else theme["key_color"]
+        cv2.rectangle(overlay, (exit_x, exit_y), (exit_x + 80, exit_y + 40), btn_color, -1)
+        cv2.rectangle(overlay, (exit_x, exit_y), (exit_x + 80, exit_y + 40), theme["border_color"], 2)
+        text_size = self.get_text_size("Exit", font_scale=0.5)
+        text_x = exit_x + (80 - text_size[0]) // 2
+        text_y = exit_y + (40 + text_size[1]) // 2
+        cv2.putText(overlay, "Exit", (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 2)
+        if is_touching_exit and hasattr(self, 'exit_button_timer'):
+            if time.time() - self.exit_button_timer > 1.0:
+                self.toggle_draw_mode()
+                self.exit_button_timer = 0
+        elif is_touching_exit:
+            self.exit_button_timer = time.time()
+        # Draw current color indicator
+        cv2.rectangle(overlay, (draw_area[0] + 50, draw_area[1] + 50), (draw_area[0] + 100, draw_area[1] + 80), self.current_color, -1)
+        cv2.rectangle(overlay, (draw_area[0] + 50, draw_area[1] + 50), (draw_area[0] + 100, draw_area[1] + 80), theme["border_color"], 2)
+        return overlay
+
     def draw_keyboard(self, overlay, hand_center=None):
         theme = self.get_current_theme()
         keys = self.layouts[self.current_layout]
@@ -315,7 +383,7 @@ class VirtualKeyboard:
                         text_size = self.get_text_size(key, font_scale=font_scale)
                         text_width, text_height = text_size
                         text_x = key_x + (self.key_width - text_width) // 2
-                        text_y = key_y + (self.key_height + text_height) // 2
+                        text_y = y + (self.key_height + text_height) // 2
                     cv2.putText(overlay, key, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 2)
                     if self.last_pressed[hand_label] != key:
                         self.pressed_time[hand_label] = time.time()
@@ -323,12 +391,21 @@ class VirtualKeyboard:
                     elif time.time() - self.pressed_time[hand_label] > 0.6:
                         self.key_animations[key] = {'pulse': 1.0, 'active': True}
                         self.play_key_sound()
-                        if key in ["Backspace", "Enter", "Space", "Theme", "Layout", "Size+", "Size-", "Game"]:
+                        if key in ["Backspace", "Enter", "Space", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]:
                             self.handle_special_keys(key)
                         else:
                             self.typed_text += key
                         self.last_pressed[hand_label] = ""
                         self.animate_key_press(key, time.time())
+
+    def process_drawing(self, overlay, finger_pos):
+        if finger_pos and self.drawing_canvas is not None:
+            current_point = finger_pos
+            if self.last_point is not None:
+                cv2.line(self.drawing_canvas, self.last_point, current_point, self.current_color, self.brush_size)
+            self.last_point = current_point
+            overlay = cv2.addWeighted(overlay, 0.8, self.drawing_canvas, 0.5, 0)
+        return overlay
 
     def draw_text_display(self, overlay):
         if self.typed_text:
@@ -344,11 +421,16 @@ class VirtualKeyboard:
 
     def draw_info_panel(self, overlay):
         theme = self.get_current_theme()
-        info_text = f"GAME MODE - {self.current_game if self.current_game else 'Menu'}" if self.game_mode else \
-                    f"Layout: {self.current_layout} | Theme: {self.current_theme} | Scale: {self.scale_factor:.1f}x"
+        if self.draw_mode:
+            info_text = "DRAW MODE - Use finger to draw, select color, or exit"
+        elif self.game_mode:
+            info_text = f"GAME MODE - {self.current_game if self.current_game else 'Menu'}"
+        else:
+            info_text = f"Layout: {self.current_layout} | Theme: {self.current_theme} | Scale: {self.scale_factor:.1f}x"
         cv2.putText(overlay, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_color"], 2)
         instructions = "Point to select game | Game button to exit" if self.game_mode else \
-                       "Spread fingers to show keyboard | Point to type | Game button for mini games"
+                      "Point to draw or select color | Exit to return" if self.draw_mode else \
+                      "Spread fingers to show keyboard | Point to type | Game or Draw button"
         cv2.putText(overlay, instructions, (10, overlay.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
 
     def run(self):
@@ -375,14 +457,20 @@ class VirtualKeyboard:
                     hand_center = ((thumb_x + pinky_x) // 2, (thumb_y + pinky_y) // 2)
                     finger_pos = (int(index_finger_tip.x * w), int(index_finger_tip.y * h))
                     cv2.circle(overlay, finger_pos, 8, (0, 255, 0), -1)
-                    if not self.game_mode:
+                    if not self.game_mode and not self.draw_mode:
                         distance = self.calculate_distance((thumb_x, thumb_y), (pinky_x, pinky_y))
                         self.show_keyboard = distance > self.show_threshold
                         if distance < self.hide_threshold:
                             self.show_keyboard = False
                         if self.show_keyboard:
                             self.process_finger_input(overlay, finger_pos[0], finger_pos[1], hand_label, hand_center)
-            if self.game_mode:
+                    elif self.draw_mode:
+                        self.process_drawing(overlay, finger_pos)
+            if self.draw_mode:
+                overlay = self.draw_color_picker(overlay, finger_pos)
+                if self.drawing_canvas is not None:
+                    overlay = cv2.addWeighted(overlay, 0.8, self.drawing_canvas, 0.5, 0)
+            elif self.game_mode:
                 if self.current_game == "menu":
                     overlay = self.draw_game_menu(overlay, finger_pos)
                 elif self.current_game in self.games:
@@ -404,6 +492,8 @@ class VirtualKeyboard:
                 break
             elif key == ord('g'):
                 self.toggle_game_mode()
+            elif key == ord('d'):
+                self.toggle_draw_mode()
         self.cap.release()
         cv2.destroyAllWindows()
         pygame.mixer.quit()
