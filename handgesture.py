@@ -1,3 +1,5 @@
+import asyncio
+import platform
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -99,23 +101,25 @@ class VirtualKeyboard:
             "pong": PongGame(),
             "catch": CatchGame(),
             "snake": SnakeGame(),
-            "typing": TypingGame(),
-            "memory": MemoryGame()
+            "typing": TypingGame(self),  
+            "memory": MemoryGame(),
+            "flappy": FlappyBirdGame()
         }
         self.draw_mode = False
         self.drawing_canvas = None
-        self.current_color = (255, 255, 255)  
+        self.current_color = (255, 255, 255)
         self.colors = [
-            (255, 255, 255),  
-            (255, 0, 0),    
-            (0, 255, 0),     
-            (0, 0, 255),      
-            (255, 255, 0),   
-            (255, 0, 255),    
-            (0, 255, 255)    
+            (255, 255, 255),
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (255, 255, 0),
+            (255, 0, 255),
+            (0, 255, 255)
         ]
         self.brush_size = 5
         self.last_point = None
+        self.hand_landmarks = None
         self.create_sound_effects()
 
     def create_sound_effects(self):
@@ -257,6 +261,7 @@ class VirtualKeyboard:
             ("Snake", "snake"),
             ("Typing Race", "typing"),
             ("Memory", "memory"),
+            ("Flappy Bird", "flappy"),
             ("Back", "back")
         ]
         button_width, button_height = 120, 40
@@ -309,7 +314,6 @@ class VirtualKeyboard:
                     self.color_selection_timer = 0
             elif is_touching:
                 self.color_selection_timer = time.time()
-        # Draw exit button
         exit_x, exit_y = draw_area[2] - 100, draw_area[1] + 10
         is_touching_exit = finger_pos and self.is_finger_touching(finger_pos[0], finger_pos[1], exit_x, exit_y, 80, 40)
         btn_color = theme["key_hover"] if is_touching_exit else theme["key_color"]
@@ -325,7 +329,6 @@ class VirtualKeyboard:
                 self.exit_button_timer = 0
         elif is_touching_exit:
             self.exit_button_timer = time.time()
-        # Draw current color indicator
         cv2.rectangle(overlay, (draw_area[0] + 50, draw_area[1] + 50), (draw_area[0] + 100, draw_area[1] + 80), self.current_color, -1)
         cv2.rectangle(overlay, (draw_area[0] + 50, draw_area[1] + 50), (draw_area[0] + 100, draw_area[1] + 80), theme["border_color"], 2)
         return overlay
@@ -383,7 +386,7 @@ class VirtualKeyboard:
                         text_size = self.get_text_size(key, font_scale=font_scale)
                         text_width, text_height = text_size
                         text_x = key_x + (self.key_width - text_width) // 2
-                        text_y = y + (self.key_height + text_height) // 2
+                        text_y = key_y + (self.key_height + text_height) // 2
                     cv2.putText(overlay, key, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 2)
                     if self.last_pressed[hand_label] != key:
                         self.pressed_time[hand_label] = time.time()
@@ -397,6 +400,7 @@ class VirtualKeyboard:
                             self.typed_text += key
                         self.last_pressed[hand_label] = ""
                         self.animate_key_press(key, time.time())
+        return overlay
 
     def process_drawing(self, overlay, finger_pos):
         if finger_pos and self.drawing_canvas is not None:
@@ -433,7 +437,7 @@ class VirtualKeyboard:
                       "Spread fingers to show keyboard | Point to type | Game or Draw button"
         cv2.putText(overlay, instructions, (10, overlay.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
 
-    def run(self):
+    async def run(self):
         while self.cap.isOpened():
             success, frame = self.cap.read()
             if not success:
@@ -463,9 +467,13 @@ class VirtualKeyboard:
                         if distance < self.hide_threshold:
                             self.show_keyboard = False
                         if self.show_keyboard:
-                            self.process_finger_input(overlay, finger_pos[0], finger_pos[1], hand_label, hand_center)
+                            overlay = self.process_finger_input(overlay, finger_pos[0], finger_pos[1], hand_label, hand_center)
                     elif self.draw_mode:
-                        self.process_drawing(overlay, finger_pos)
+                        overlay = self.process_drawing(overlay, finger_pos)
+                    # Store hand landmarks for games
+                    if self.game_mode and self.current_game in self.games:
+                        self.games[self.current_game].hand_landmarks = hand_landmarks
+                        self.games[self.current_game].mp_hands = self.mp_hands
             if self.draw_mode:
                 overlay = self.draw_color_picker(overlay, finger_pos)
                 if self.drawing_canvas is not None:
@@ -474,7 +482,7 @@ class VirtualKeyboard:
                 if self.current_game == "menu":
                     overlay = self.draw_game_menu(overlay, finger_pos)
                 elif self.current_game in self.games:
-                    overlay = self.games[self.current_game].update(overlay, finger_pos)
+                    overlay = self.games[self.current_game].update(overlay, finger_pos, self.typed_text)
                     overlay = self.draw_finish_button(overlay, finger_pos, self.games[self.current_game].game_area)
             else:
                 if self.show_keyboard:
@@ -494,6 +502,7 @@ class VirtualKeyboard:
                 self.toggle_game_mode()
             elif key == ord('d'):
                 self.toggle_draw_mode()
+            await asyncio.sleep(1.0 / 60)  
         self.cap.release()
         cv2.destroyAllWindows()
         pygame.mixer.quit()
@@ -502,6 +511,8 @@ class PongGame:
     def __init__(self):
         self.game_area = (100, 100, 700, 500)
         self.reset()
+        self.hand_landmarks = None
+        self.mp_hands = None
 
     def reset(self):
         self.paddle_y = 300
@@ -514,7 +525,7 @@ class PongGame:
         self.paddle_height = 100
         self.ball_size = 15
 
-    def update(self, overlay, finger_pos):
+    def update(self, overlay, finger_pos, typed_text=""):
         if finger_pos:
             self.paddle_y = max(self.game_area[1], min(self.game_area[3] - self.paddle_height, finger_pos[1] - self.paddle_height // 2))
         self.ball_x += self.ball_dx
@@ -545,6 +556,8 @@ class CatchGame:
     def __init__(self):
         self.game_area = (100, 100, 700, 500)
         self.reset()
+        self.hand_landmarks = None
+        self.mp_hands = None
 
     def reset(self):
         self.basket_x = 400
@@ -554,7 +567,7 @@ class CatchGame:
         self.score = 0
         self.last_spawn = time.time()
 
-    def update(self, overlay, finger_pos):
+    def update(self, overlay, finger_pos, typed_text=""):
         if finger_pos:
             self.basket_x = max(self.game_area[0], min(self.game_area[2] - self.basket_width, finger_pos[0] - self.basket_width // 2))
         if time.time() - self.last_spawn > 1.0:
@@ -589,6 +602,8 @@ class SnakeGame:
         self.game_area = (100, 100, 700, 500)
         self.grid_size = 20
         self.reset()
+        self.hand_landmarks = None
+        self.mp_hands = None
 
     def reset(self):
         self.snake = [(400, 300), (380, 300), (360, 300)]
@@ -598,11 +613,14 @@ class SnakeGame:
         self.last_move = time.time()
 
     def spawn_food(self):
-        x = random.randint(self.game_area[0] // self.grid_size, self.game_area[2] // self.grid_size) * self.grid_size
-        y = random.randint(self.game_area[1] // self.grid_size, self.game_area[3] // self.grid_size) * self.grid_size
-        return (x, y)
+        while True:
+            x = random.randint(self.game_area[0] // self.grid_size, (self.game_area[2] - self.grid_size) // self.grid_size) * self.grid_size
+            y = random.randint(self.game_area[1] // self.grid_size, (self.game_area[3] - self.grid_size) // self.grid_size) * self.grid_size
+            new_food = (x, y)
+            if new_food not in self.snake:
+                return new_food
 
-    def update(self, overlay, finger_pos):
+    def update(self, overlay, finger_pos, typed_text=""):
         if finger_pos and len(self.snake) > 0:
             head_x, head_y = self.snake[0]
             dx = finger_pos[0] - head_x
@@ -619,7 +637,7 @@ class SnakeGame:
                 self.reset()
                 return overlay
             self.snake.insert(0, new_head)
-            if new_head == self.food:
+            if abs(new_head[0] - self.food[0]) < self.grid_size and abs(new_head[1] - self.food[1]) < self.grid_size:
                 self.score += 1
                 self.food = self.spawn_food()
             else:
@@ -637,10 +655,13 @@ class SnakeGame:
         cv2.putText(overlay, f"Score: {self.score}", (self.game_area[0], self.game_area[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
 class TypingGame:
-    def __init__(self):
+    def __init__(self, parent):
         self.words = ["PYTHON", "OPENCV", "MEDIAPIPE", "KEYBOARD", "VIRTUAL", "GAME", "CODE", "TECH"]
         self.game_area = (200, 200, 600, 400)
+        self.parent = parent  # Reference to VirtualKeyboard
         self.reset()
+        self.hand_landmarks = None
+        self.mp_hands = None
 
     def reset(self):
         self.current_word = random.choice(self.words)
@@ -649,7 +670,15 @@ class TypingGame:
         self.start_time = time.time()
         self.words_completed = 0
 
-    def update(self, overlay, finger_pos):
+    def update(self, overlay, finger_pos, typed_text=""):
+        if typed_text:
+            self.typed_chars = typed_text
+            if self.typed_chars == self.current_word:
+                self.score += 1
+                self.words_completed += 1
+                self.current_word = random.choice(self.words)
+                self.typed_chars = ""
+                self.parent.typed_text = ""  
         self.draw(overlay)
         return overlay
 
@@ -658,12 +687,18 @@ class TypingGame:
         cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
         cv2.putText(overlay, "TYPING RACE", (self.game_area[0] + 50, self.game_area[1] + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         cv2.putText(overlay, f"Type: {self.current_word}", (self.game_area[0] + 50, self.game_area[1] + 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-        cv2.putText(overlay, "Use keyboard to type the word", (self.game_area[0] + 50, self.game_area[1] + 150), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 2)
+        cv2.putText(overlay, f"Typed: {self.typed_chars}", (self.game_area[0] + 50, self.game_area[1] + 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+        cv2.putText(overlay, f"Score: {self.score}", (self.game_area[0] + 50, self.game_area[1] + 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(overlay, "Use keyboard to type the word", (self.game_area[0] + 50, self.game_area[1] + 190), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 2)
 
 class MemoryGame:
     def __init__(self):
         self.game_area = (200, 150, 600, 450)
+        self.last_input_time = 0
+        self.input_cooldown = 0.5
         self.reset()
+        self.hand_landmarks = None
+        self.mp_hands = None
 
     def reset(self):
         self.sequence = []
@@ -688,7 +723,7 @@ class MemoryGame:
         self.game_state = "showing"
         self.last_update = time.time()
 
-    def update(self, overlay, finger_pos):
+    def update(self, overlay, finger_pos, typed_text=""):
         current_time = time.time()
         if self.game_state == "showing":
             if current_time - self.last_update > 0.8:
@@ -696,20 +731,20 @@ class MemoryGame:
                 if self.current_step >= len(self.sequence):
                     self.game_state = "input"
                     self.player_input = []
-                    self.current_step = 0
+                    self.positive_step = 0
                 self.last_update = current_time
-        elif self.game_state == "input" and finger_pos:
+        elif self.game_state == "input" and finger_pos and current_time - self.last_input_time > self.input_cooldown:
             for button in self.buttons:
                 btn_x, btn_y = button["pos"]
                 if abs(finger_pos[0] - btn_x) < self.button_size // 2 and abs(finger_pos[1] - btn_y) < self.button_size // 2:
-                    if len(self.player_input) < len(self.sequence):
-                        self.player_input.append(button["id"])
-                        if self.player_input[-1] != self.sequence[len(self.player_input) - 1]:
-                            self.reset()
-                            return overlay
-                        if len(self.player_input) == len(self.sequence):
-                            self.score += 1
-                            self.generate_sequence()
+                    self.player_input.append(button["id"])
+                    self.last_input_time = current_time
+                    if self.player_input[-1] != self.sequence[len(self.player_input) - 1]:
+                        self.reset()
+                        return overlay
+                    if len(self.player_input) == len(self.sequence):
+                        self.score += 1
+                        self.generate_sequence()
                     break
         self.draw(overlay)
         return overlay
@@ -731,9 +766,102 @@ class MemoryGame:
         elif self.game_state == "input":
             cv2.putText(overlay, "Repeat the sequence!", (250, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-if __name__ == "__main__":
-    try:
-        keyboard = VirtualKeyboard()
-        keyboard.run()
-    except Exception as e:
-        print(f"Error: {e}")
+class FlappyBirdGame:
+    def __init__(self):
+        self.game_area = (100, 100, 700, 500)  
+        self.bird_size = 20
+        self.pipe_width = 50
+        self.gap_size = 150
+        self.pipe_speed = 3
+        self.gravity = 0.5
+        self.lift = -2
+        self.hand_landmarks = None
+        self.mp_hands = None
+        self.reset()
+
+    def reset(self):
+        self.bird_x = self.game_area[0] + 100
+        self.bird_y = (self.game_area[1] + self.game_area[3]) // 2
+        self.bird_velocity = 0
+        self.pipes = []
+        self.score = 0
+        self.last_pipe_spawn = time.time()
+        self.game_over = False
+
+    def update(self, overlay, finger_pos, typed_text=""):
+        if self.game_over:
+            if finger_pos: 
+                self.reset()
+            return overlay
+
+        velocity_change = 0
+        if self.hand_landmarks and self.mp_hands:
+            thumb_tip = self.hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
+            index_tip = self.hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
+            w, h = overlay.shape[1], overlay.shape[0]
+            thumb_x, thumb_y = thumb_tip.x * w, thumb_tip.y * h
+            index_x, index_y = index_tip.x * w, index_tip.y * h
+            distance = self.calculate_distance((thumb_x, thumb_y), (index_x, index_y))
+            pinch_threshold = 50
+            open_threshold = 100
+            if distance < pinch_threshold:
+                velocity_change = self.gravity  
+            elif distance > open_threshold:
+                velocity_change = self.lift  
+
+        self.bird_velocity += velocity_change
+        self.bird_y += self.bird_velocity
+        if self.bird_y < self.game_area[1] or self.bird_y > self.game_area[3] - self.bird_size:
+            self.game_over = True
+
+        if time.time() - self.last_pipe_spawn > 2.0:
+            gap_y = random.randint(self.game_area[1] + 100, self.game_area[3] - 100 - self.gap_size)
+            self.pipes.append({
+                'x': self.game_area[2],
+                'gap_y': gap_y
+            })
+            self.last_pipe_spawn = time.time()
+
+        for pipe in self.pipes[:]:
+            pipe['x'] -= self.pipe_speed
+            if pipe['x'] + self.pipe_width < self.game_area[0]:
+                self.pipes.remove(pipe)
+                self.score += 1
+            elif (pipe['x'] < self.bird_x + self.bird_size and
+                  pipe['x'] + self.pipe_width > self.bird_x and
+                  (self.bird_y < pipe['gap_y'] - self.gap_size // 2 or
+                   self.bird_y + self.bird_size > pipe['gap_y'] + self.gap_size // 2)):
+                self.game_over = True
+
+        self.draw(overlay)
+        return overlay
+
+    def calculate_distance(self, point1, point2):
+        return ((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)**0.5
+
+    def draw(self, overlay):
+        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]),
+                      (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
+        cv2.circle(overlay, (int(self.bird_x), int(self.bird_y)), self.bird_size // 2, (255, 255, 0), -1)
+        for pipe in self.pipes:
+            cv2.rectangle(overlay, (int(pipe['x']), self.game_area[1]),
+                          (int(pipe['x']) + self.pipe_width, int(pipe['gap_y'] - self.gap_size // 2)),
+                          (0, 255, 0), -1)
+            cv2.rectangle(overlay, (int(pipe['x']), int(pipe['gap_y'] + self.gap_size // 2)),
+                          (int(pipe['x']) + self.pipe_width, self.game_area[3]),
+                          (0, 255, 0), -1)
+        cv2.putText(overlay, f"Score: {self.score}", (self.game_area[0], self.game_area[1] - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        if self.game_over:
+            cv2.putText(overlay, "Game Over! Point to restart", (self.game_area[0] + 50, self.game_area[3] - 50),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
+
+async def main():
+    keyboard = VirtualKeyboard()
+    await keyboard.run()
+
+if platform.system() == "Emscripten":
+    asyncio.ensure_future(main())
+else:
+    if __name__ == "__main__":
+        asyncio.run(main())
