@@ -105,8 +105,6 @@ class VirtualKeyboard:
             "pong": PongGame(),
             "catch": CatchGame(),
             "snake": SnakeGame(),
-            "typing": TypingGame(self),  
-            "memory": MemoryGame(),
             "flappy": FlappyBirdGame()
         }
         self.draw_mode = False
@@ -245,6 +243,15 @@ class VirtualKeyboard:
             return game.score
         return None
 
+    def get_game_instructions(self):
+        tips = {
+            "pong": "Pong: Gerak paddle dengan jari, pantulkan bola, capai 10 poin untuk WIN.",
+            "catch": "Catch: Gerak keranjang, tangkap bola jatuh, hindari miss, 10 poin untuk WIN.",
+            "snake": "Snake: Arahkan kepala ular dengan jari, makan makanan, jangan tabrak dinding/tubuh, skor 10 menang.",
+            "flappy": "Flappy: Buka jari (lebih lebar) untuk flap, lewati pipa, skor 10 menang."
+        }
+        return tips.get(self.current_game, "Pilih game, lalu ikuti instruksi di layar.")
+
     def draw_finish_button(self, overlay, finger_pos, game_area):
         theme = self.get_current_theme()
         button_x, button_y = game_area[2] - 100, game_area[1] + 10
@@ -278,8 +285,6 @@ class VirtualKeyboard:
             ("Pong", "pong"),
             ("Catch Balls", "catch"),
             ("Snake", "snake"),
-            ("Typing Race", "typing"),
-            ("Memory", "memory"),
             ("Flappy Bird", "flappy"),
             ("Back", "back")
         ]
@@ -453,9 +458,14 @@ class VirtualKeyboard:
         else:
             info_text = f"Layout: {self.current_layout} | Theme: {self.current_theme} | Scale: {self.scale_factor:.1f}x"
         cv2.putText(overlay, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_color"], 2)
-        instructions = "Point to select game | Game button to exit" if self.game_mode else \
-                      "Point to draw or select color | Exit to return" if self.draw_mode else \
-                      "Spread fingers to show keyboard | Point to type | Game or Draw button"
+        if self.game_mode and self.current_game and self.current_game != "menu":
+            instructions = self.get_game_instructions()
+        elif self.game_mode:
+            instructions = "Menu game: pilih level & game dengan menunjuk."
+        elif self.draw_mode:
+            instructions = "Point to draw or select color | Exit to return"
+        else:
+            instructions = "Spread fingers to show keyboard | Point to type | Game or Draw button"
         cv2.putText(overlay, instructions, (10, overlay.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
 
     async def run(self):
@@ -675,118 +685,85 @@ class SnakeGame:
         cv2.rectangle(overlay, self.food, (self.food[0] + self.grid_size, self.food[1] + self.grid_size), (255, 0, 0), -1)
         cv2.putText(overlay, f"Score: {self.score}", (self.game_area[0], self.game_area[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
-class TypingGame:
-    def __init__(self, parent):
-        self.words = ["PYTHON", "OPENCV", "MEDIAPIPE", "KEYBOARD", "VIRTUAL", "GAME", "CODE", "TECH"]
-        self.game_area = (200, 200, 600, 400)
-        self.parent = parent  # Reference to VirtualKeyboard
-        self.reset()
-        self.hand_landmarks = None
-        self.mp_hands = None
-
-    def reset(self):
-        self.current_word = random.choice(self.words)
-        self.typed_chars = ""
-        self.score = 0
-        self.start_time = time.time()
-        self.words_completed = 0
-
-    def update(self, overlay, finger_pos, typed_text=""):
-        if typed_text:
-            self.typed_chars = typed_text
-            if self.typed_chars == self.current_word:
-                self.score += 1
-                self.words_completed += 1
-                self.current_word = random.choice(self.words)
-                self.typed_chars = ""
-                self.parent.typed_text = ""  
-        self.draw(overlay)
-        return overlay
-
-    def draw(self, overlay):
-        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (50, 50, 50), -1)
-        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
-        cv2.putText(overlay, "TYPING RACE", (self.game_area[0] + 50, self.game_area[1] + 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        cv2.putText(overlay, f"Type: {self.current_word}", (self.game_area[0] + 50, self.game_area[1] + 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-        cv2.putText(overlay, f"Typed: {self.typed_chars}", (self.game_area[0] + 50, self.game_area[1] + 130), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-        cv2.putText(overlay, f"Score: {self.score}", (self.game_area[0] + 50, self.game_area[1] + 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        cv2.putText(overlay, "Use keyboard to type the word", (self.game_area[0] + 50, self.game_area[1] + 190), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 2)
-
 class MemoryGame:
+    """
+    Diganti menjadi game Target Tap:
+    - Target bulat muncul acak, sentuh untuk skor.
+    - Hit target 10x untuk menang.
+    """
+
     def __init__(self):
         self.game_area = (200, 150, 600, 450)
-        self.last_input_time = 0
-        self.input_cooldown = 0.5
+        self.target_radius = 28
+        self.target_pos = None
+        self.spawn_interval = 1.2
+        self.last_spawn = 0
+        self.score = 0
+        self.win = False
+        self.instructions = [
+            "1) Sentuh target bulat yang muncul.",
+            "2) Target pindah setiap muncul/hit.",
+            "3) Lewatkan saja target lain.",
+            "4) Capai skor 10 untuk menang."
+        ]
         self.reset()
         self.hand_landmarks = None
         self.mp_hands = None
 
     def reset(self):
-        self.sequence = []
-        self.player_input = []
-        self.showing_sequence = False
-        self.current_step = 0
-        self.game_state = "waiting"
-        self.last_update = time.time()
         self.score = 0
-        self.buttons = [
-            {"pos": (300, 250), "color": (255, 0, 0), "id": 0},
-            {"pos": (400, 250), "color": (0, 255, 0), "id": 1},
-            {"pos": (300, 350), "color": (0, 0, 255), "id": 2},
-            {"pos": (400, 350), "color": (255, 255, 0), "id": 3}
-        ]
-        self.button_size = 60
-        self.generate_sequence()
+        self.win = False
+        self.last_spawn = time.time()
+        self.target_pos = self.random_target()
 
-    def generate_sequence(self):
-        self.sequence.append(random.randint(0, 3))
-        self.current_step = 0
-        self.game_state = "showing"
-        self.last_update = time.time()
+    def random_target(self):
+        margin = 60
+        x = random.randint(self.game_area[0] + margin, self.game_area[2] - margin)
+        y = random.randint(self.game_area[1] + margin, self.game_area[3] - margin)
+        color = (
+            random.randint(100, 255),
+            random.randint(100, 255),
+            random.randint(100, 255)
+        )
+        return {"pos": (x, y), "color": color}
 
     def update(self, overlay, finger_pos, typed_text=""):
-        current_time = time.time()
-        if self.game_state == "showing":
-            if current_time - self.last_update > 0.8:
-                self.current_step += 1
-                if self.current_step >= len(self.sequence):
-                    self.game_state = "input"
-                    self.player_input = []
-                    self.positive_step = 0
-                self.last_update = current_time
-        elif self.game_state == "input" and finger_pos and current_time - self.last_input_time > self.input_cooldown:
-            for button in self.buttons:
-                btn_x, btn_y = button["pos"]
-                if abs(finger_pos[0] - btn_x) < self.button_size // 2 and abs(finger_pos[1] - btn_y) < self.button_size // 2:
-                    self.player_input.append(button["id"])
-                    self.last_input_time = current_time
-                    if self.player_input[-1] != self.sequence[len(self.player_input) - 1]:
-                        self.reset()
-                        return overlay
-                    if len(self.player_input) == len(self.sequence):
-                        self.score += 1
-                        self.generate_sequence()
-                    break
-        self.draw(overlay)
+        now = time.time()
+        if self.win:
+            self.draw(overlay, win=True)
+            return overlay
+        if now - self.last_spawn > self.spawn_interval:
+            self.target_pos = self.random_target()
+            self.last_spawn = now
+        if finger_pos and self.target_pos:
+            tx, ty = self.target_pos["pos"]
+            dist = math.hypot(finger_pos[0] - tx, finger_pos[1] - ty)
+            if dist <= self.target_radius:
+                self.score += 1
+                if self.score >= 10:
+                    self.win = True
+                self.target_pos = self.random_target()
+                self.last_spawn = now
+        self.draw(overlay, win=False)
         return overlay
 
-    def draw(self, overlay):
-        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (30, 30, 30), -1)
+    def draw(self, overlay, win=False):
+        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (25, 25, 35), -1)
         cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
-        cv2.putText(overlay, "MEMORY GAME", (250, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        cv2.putText(overlay, f"Level: {self.score + 1}", (250, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(overlay, f"Score: {self.score}", (250, 255), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        for i, button in enumerate(self.buttons):
-            btn_x, btn_y = button["pos"]
-            color = button["color"]
-            if self.game_state == "showing" and self.current_step < len(self.sequence) and self.sequence[self.current_step] == button["id"]:
-                color = tuple(min(255, c + 100) for c in color)
-            cv2.circle(overlay, (btn_x, btn_y), self.button_size // 2, color, -1)
-            cv2.circle(overlay, (btn_x, btn_y), self.button_size // 2, (255, 255, 255), 2)
-        if self.game_state == "showing":
-            cv2.putText(overlay, "Watch the sequence...", (250, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
-        elif self.game_state == "input":
-            cv2.putText(overlay, "Repeat the sequence!", (250, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.putText(overlay, "TARGET TAP", (240, 190), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 255, 255), 2)
+        cv2.putText(overlay, f"Score: {self.score}", (240, 220), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 255, 200), 2)
+        instr_x, instr_y = self.game_area[0] + 20, self.game_area[3] - 140
+        cv2.rectangle(overlay, (instr_x - 10, instr_y - 60), (instr_x + 330, instr_y + 70), (45, 45, 60), -1)
+        cv2.rectangle(overlay, (instr_x - 10, instr_y - 60), (instr_x + 330, instr_y + 70), (180, 180, 200), 1)
+        cv2.putText(overlay, "Langkah:", (instr_x, instr_y - 35), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        for i, line in enumerate(self.instructions):
+            cv2.putText(overlay, line, (instr_x, instr_y - 10 + i * 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
+        if self.target_pos:
+            tx, ty = self.target_pos["pos"]
+            cv2.circle(overlay, (tx, ty), self.target_radius, self.target_pos["color"], -1)
+            cv2.circle(overlay, (tx, ty), self.target_radius, (255, 255, 255), 2)
+        if win:
+            cv2.putText(overlay, "WIN! Sentuh untuk reset", (230, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
 class FlappyBirdGame:
     def __init__(self):
