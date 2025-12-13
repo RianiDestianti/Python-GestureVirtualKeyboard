@@ -532,7 +532,6 @@ class VirtualKeyboard:
                             overlay = self.process_finger_input(overlay, finger_pos[0], finger_pos[1], hand_label, hand_center)
                     elif self.draw_mode:
                         overlay = self.process_drawing(overlay, finger_pos)
-                    # Store hand landmarks for games
                     if self.game_mode and self.current_game in self.games:
                         self.games[self.current_game].hand_landmarks = hand_landmarks
                         self.games[self.current_game].mp_hands = self.mp_hands
@@ -951,7 +950,6 @@ class WhackAMoleGame:
         self.win_fx.reset()
         self.active_mole = None
         self.last_spawn = time.time()
-        # Layout holes as a 3x2 grid centered in game_area
         left, top, right, bottom = self.game_area
         width = right - left
         height = bottom - top
@@ -1095,7 +1093,7 @@ class FlappyBirdGame:
         self.game_area = (100, 100, 700, 500)  
         self.bird_size = 20
         self.pipe_width = 50
-        self.gap_size = 180  # bigger default gap to avoid merged pipes
+        self.gap_size = 180
         self.pipe_speed = 3
         self.gravity = 0.5
         self.lift = -6
@@ -1104,7 +1102,7 @@ class FlappyBirdGame:
         self.max_velocity = 10
         self.win = False
         self.win_fx = WinCelebration()
-        self.pipe_spacing = 220  # minimum horizontal spacing between pipes
+        self.pipe_spacing = 220
         self.reset()
 
     def reset(self):
@@ -1126,12 +1124,11 @@ class FlappyBirdGame:
                 self.reset()
             return overlay
         if self.game_over:
-            # Allow restart by pointing when lose, keep scene drawn.
             if finger_pos:
                 self.reset()
             self.draw(overlay, win=False)
             return overlay
-        velocity_change = self.gravity  # default gravity pull
+        velocity_change = self.gravity
         if self.hand_landmarks and self.mp_hands:
             thumb_tip = self.hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
             index_tip = self.hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
@@ -1142,7 +1139,7 @@ class FlappyBirdGame:
             pinch_threshold = 50
             open_threshold = 120
             if distance > open_threshold:
-                velocity_change += self.lift  # flap up
+                velocity_change += self.lift
 
         self.bird_velocity += velocity_change
         self.bird_velocity = max(-self.max_velocity, min(self.max_velocity, self.bird_velocity))
@@ -1157,7 +1154,6 @@ class FlappyBirdGame:
             self.game_over = True
 
         if time.time() - self.last_pipe_spawn > 1.6:
-            # Ensure pipes don't spawn on top of each other horizontally
             if not self.pipes or self.pipes[-1]['x'] < self.game_area[2] - self.pipe_spacing:
                 margin = 80
                 min_gap_y = self.game_area[1] + margin + self.gap_size // 2
