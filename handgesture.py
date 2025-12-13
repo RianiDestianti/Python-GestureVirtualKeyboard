@@ -106,6 +106,7 @@ class VirtualKeyboard:
             "catch": CatchGame(),
             "snake": SnakeGame(),
             "mole": WhackAMoleGame(),
+            "balloon": BalloonPopGame(),
             "flappy": FlappyBirdGame()
         }
         self.draw_mode = False
@@ -250,6 +251,7 @@ class VirtualKeyboard:
             "catch": "Catch: Gerak keranjang, tangkap bola jatuh, hindari miss, 10 poin untuk WIN.",
             "snake": "Snake: Arahkan kepala ular dengan jari, makan makanan, jangan tabrak dinding/tubuh, skor 10 menang.",
             "mole": "Whack A Mole: Ketuk mole yang muncul, 10 hit untuk menang.",
+            "balloon": "Balloon Pop: Pecahkan balon yang naik; 10 balon pecah menang.",
             "flappy": "Flappy: Buka jari (lebih lebar) untuk flap, lewati pipa, skor 10 menang."
         }
         return tips.get(self.current_game, "Pilih game, lalu ikuti instruksi di layar.")
@@ -288,6 +290,7 @@ class VirtualKeyboard:
             ("Catch Balls", "catch"),
             ("Snake", "snake"),
             ("Whack A Mole", "mole"),
+            ("Balloon Pop", "balloon"),
             ("Flappy Bird", "flappy"),
             ("Back", "back")
         ]
@@ -847,6 +850,83 @@ class WhackAMoleGame:
         cv2.putText(overlay, "Sentuh mole untuk skor. 10 = WIN", (title_x, self.game_area[3] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         if win:
             cv2.putText(overlay, "WIN! Sentuh untuk reset", (260, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+class BalloonPopGame:
+    def __init__(self):
+        self.game_area = (200, 150, 600, 450)
+        self.balloons = []
+        self.last_spawn = time.time()
+        self.spawn_interval = 1.2
+        self.radius = 30
+        self.speed_range = (1.5, 2.5)
+        self.score = 0
+        self.win = False
+        self.speed_mul = 1.0
+        self.reset()
+
+    def set_difficulty(self, multiplier):
+        self.speed_mul = multiplier
+        self.spawn_interval = max(0.5, 1.2 / multiplier)
+        low, high = 1.5 * multiplier, 2.5 * multiplier
+        self.speed_range = (low, high)
+        self.reset()
+
+    def reset(self):
+        self.balloons = []
+        self.last_spawn = time.time()
+        self.score = 0
+        self.win = False
+
+    def spawn_balloon(self):
+        x = random.randint(self.game_area[0] + self.radius, self.game_area[2] - self.radius)
+        y = self.game_area[3] - self.radius
+        speed = random.uniform(*self.speed_range)
+        color = (
+            random.randint(100, 255),
+            random.randint(100, 255),
+            random.randint(100, 255)
+        )
+        self.balloons.append({"pos": [x, y], "speed": speed, "color": color})
+
+    def update(self, overlay, finger_pos, typed_text=""):
+        now = time.time()
+        if self.win:
+            self.draw(overlay, win=True)
+            if finger_pos:
+                self.reset()
+            return overlay
+        if now - self.last_spawn > self.spawn_interval:
+            self.spawn_balloon()
+            self.last_spawn = now
+        for balloon in self.balloons[:]:
+            balloon["pos"][1] -= balloon["speed"]
+            if balloon["pos"][1] < self.game_area[1]:
+                self.balloons.remove(balloon)
+        if finger_pos:
+            for balloon in self.balloons[:]:
+                bx, by = balloon["pos"]
+                dist = math.hypot(finger_pos[0] - bx, finger_pos[1] - by)
+                if dist <= self.radius:
+                    self.score += 1
+                    if self.score >= 10:
+                        self.win = True
+                    self.balloons.remove(balloon)
+        self.draw(overlay, win=False)
+        return overlay
+
+    def draw(self, overlay, win=False):
+        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
+        title_x = self.game_area[0] + 20
+        title_y = self.game_area[1] + 30
+        cv2.putText(overlay, "BALLOON POP", (title_x, title_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        cv2.putText(overlay, f"Score: {self.score}", (title_x, title_y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        for balloon in self.balloons:
+            bx, by = int(balloon["pos"][0]), int(balloon["pos"][1])
+            cv2.circle(overlay, (bx, by), self.radius, balloon["color"], -1)
+            cv2.circle(overlay, (bx, by + self.radius), int(self.radius * 0.5), balloon["color"], 2)
+        cv2.putText(overlay, "Sentuh balon untuk pecahkan. 10 = WIN", (title_x, self.game_area[3] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        if win:
+            cv2.putText(overlay, "WIN! Sentuh untuk reset", (title_x + 30, self.game_area[3] - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
 class FlappyBirdGame:
     def __init__(self):
