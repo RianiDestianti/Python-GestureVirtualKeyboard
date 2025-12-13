@@ -8,7 +8,11 @@ import math
 import pygame
 import random
 
-pygame.mixer.init()
+try:
+    pygame.mixer.init()
+    MIXER_READY = True
+except pygame.error:
+    MIXER_READY = False
 
 class VirtualKeyboard:
     def __init__(self):
@@ -123,6 +127,9 @@ class VirtualKeyboard:
         self.create_sound_effects()
 
     def create_sound_effects(self):
+        if not MIXER_READY:
+            self.key_sound = None
+            return
         try:
             sample_rate = 22050
             duration = 0.1
@@ -137,7 +144,7 @@ class VirtualKeyboard:
             stereo_arr[:, 1] = arr
             self.key_sound = pygame.sndarray.make_sound(stereo_arr)
             self.key_sound.set_volume(0.3)
-        except:
+        except Exception:
             self.key_sound = None
 
     def play_key_sound(self):
@@ -190,12 +197,16 @@ class VirtualKeyboard:
         return int(base_x + curve_offset_x), int(base_y + curve_offset_y)
 
     def animate_key_press(self, key, start_time):
-        elapsed = time.time() - start_time
+        animation = self.key_animations.get(key, {})
+        start = animation.get("start_time", start_time)
+        animation["start_time"] = start
+        elapsed = time.time() - start
         if elapsed < self.animation_duration:
-            pulse = abs(math.sin(elapsed * 10))
-            self.key_animations[key] = {'pulse': pulse, 'active': True}
-        elif key in self.key_animations:
-            del self.key_animations[key]
+            animation["pulse"] = abs(math.sin(elapsed * 10))
+            animation["active"] = True
+            self.key_animations[key] = animation
+        else:
+            self.key_animations.pop(key, None)
 
     def is_finger_touching(self, x, y, button_x, button_y, button_width, button_height):
         return button_x < x < button_x + button_width and button_y < y < button_y + button_height
@@ -400,7 +411,7 @@ class VirtualKeyboard:
                         self.pressed_time[hand_label] = time.time()
                         self.last_pressed[hand_label] = key
                     elif time.time() - self.pressed_time[hand_label] > 0.6:
-                        self.key_animations[key] = {'pulse': 1.0, 'active': True}
+                        self.key_animations[key] = {'pulse': 1.0, 'active': True, 'start_time': time.time()}
                         self.play_key_sound()
                         if key in ["Backspace", "Enter", "Space", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]:
                             self.handle_special_keys(key)
@@ -782,15 +793,19 @@ class FlappyBirdGame:
         self.game_area = (100, 100, 700, 500)  
         self.bird_size = 20
         self.pipe_width = 50
-        self.gap_size = 150
+        self.gap_size = 180  # bigger default gap to avoid merged pipes
         self.pipe_speed = 3
         self.gravity = 0.5
-        self.lift = -2
+        self.lift = -6
         self.hand_landmarks = None
         self.mp_hands = None
+        self.max_velocity = 10
+        self.win = False
+        self.pipe_spacing = 220  # minimum horizontal spacing between pipes
         self.reset()
 
     def reset(self):
+        self.win = False
         self.bird_x = self.game_area[0] + 100
         self.bird_y = (self.game_area[1] + self.game_area[3]) // 2
         self.bird_velocity = 0
@@ -800,12 +815,13 @@ class FlappyBirdGame:
         self.game_over = False
 
     def update(self, overlay, finger_pos, typed_text=""):
-        if self.game_over:
-            if finger_pos: 
+        if self.win or self.game_over:
+            # Allow restart by pointing when win/lose, but keep scene drawn.
+            if finger_pos:
                 self.reset()
+            self.draw(overlay, win=self.win)
             return overlay
-
-        velocity_change = 0
+        velocity_change = self.gravity  # default gravity pull
         if self.hand_landmarks and self.mp_hands:
             thumb_tip = self.hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
             index_tip = self.hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
@@ -814,30 +830,47 @@ class FlappyBirdGame:
             index_x, index_y = index_tip.x * w, index_tip.y * h
             distance = self.calculate_distance((thumb_x, thumb_y), (index_x, index_y))
             pinch_threshold = 50
-            open_threshold = 100
-            if distance < pinch_threshold:
-                velocity_change = self.gravity  
-            elif distance > open_threshold:
-                velocity_change = self.lift  
+            open_threshold = 120
+            if distance > open_threshold:
+                velocity_change += self.lift  # flap up
 
         self.bird_velocity += velocity_change
+        self.bird_velocity = max(-self.max_velocity, min(self.max_velocity, self.bird_velocity))
         self.bird_y += self.bird_velocity
-        if self.bird_y < self.game_area[1] or self.bird_y > self.game_area[3] - self.bird_size:
+        if self.bird_y < self.game_area[1]:
+            self.bird_y = self.game_area[1]
+            self.bird_velocity = 0
+            self.game_over = True
+        if self.bird_y > self.game_area[3] - self.bird_size:
+            self.bird_y = self.game_area[3] - self.bird_size
+            self.bird_velocity = 0
             self.game_over = True
 
-        if time.time() - self.last_pipe_spawn > 2.0:
-            gap_y = random.randint(self.game_area[1] + 100, self.game_area[3] - 100 - self.gap_size)
-            self.pipes.append({
-                'x': self.game_area[2],
-                'gap_y': gap_y
-            })
-            self.last_pipe_spawn = time.time()
+        if time.time() - self.last_pipe_spawn > 1.6:
+            # Ensure pipes don't spawn on top of each other horizontally
+            if not self.pipes or self.pipes[-1]['x'] < self.game_area[2] - self.pipe_spacing:
+                margin = 80
+                min_gap_y = self.game_area[1] + margin + self.gap_size // 2
+                max_gap_y = self.game_area[3] - margin - self.gap_size // 2
+                min_gap_y = max(min_gap_y, self.game_area[1] + self.gap_size // 2 + 10)
+                max_gap_y = min(max_gap_y, self.game_area[3] - self.gap_size // 2 - 10)
+                if min_gap_y < max_gap_y:
+                    gap_y = random.randint(min_gap_y, max_gap_y)
+                else:
+                    gap_y = (self.game_area[1] + self.game_area[3]) // 2
+                self.pipes.append({
+                    'x': self.game_area[2],
+                    'gap_y': gap_y
+                })
+                self.last_pipe_spawn = time.time()
 
         for pipe in self.pipes[:]:
             pipe['x'] -= self.pipe_speed
             if pipe['x'] + self.pipe_width < self.game_area[0]:
                 self.pipes.remove(pipe)
                 self.score += 1
+                if self.score >= 10:
+                    self.win = True
             elif (pipe['x'] < self.bird_x + self.bird_size and
                   pipe['x'] + self.pipe_width > self.bird_x and
                   (self.bird_y < pipe['gap_y'] - self.gap_size // 2 or
@@ -850,7 +883,7 @@ class FlappyBirdGame:
     def calculate_distance(self, point1, point2):
         return ((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)**0.5
 
-    def draw(self, overlay):
+    def draw(self, overlay, win=False):
         cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]),
                       (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
         cv2.circle(overlay, (int(self.bird_x), int(self.bird_y)), self.bird_size // 2, (255, 255, 0), -1)
@@ -863,7 +896,10 @@ class FlappyBirdGame:
                           (0, 255, 0), -1)
         cv2.putText(overlay, f"Score: {self.score}", (self.game_area[0], self.game_area[1] - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        if self.game_over:
+        if win:
+            cv2.putText(overlay, "WIN!", (self.game_area[0] + 200, self.game_area[1] + 250),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 4)
+        elif self.game_over:
             cv2.putText(overlay, "Game Over! Point to restart", (self.game_area[0] + 50, self.game_area[3] - 50),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 0), 2)
 
