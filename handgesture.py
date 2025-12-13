@@ -107,7 +107,8 @@ class VirtualKeyboard:
             "snake": SnakeGame(),
             "mole": WhackAMoleGame(),
             "balloon": BalloonPopGame(),
-            "flappy": FlappyBirdGame()
+            "flappy": FlappyBirdGame(),
+            "dodge": DodgeGame()
         }
         self.draw_mode = False
         self.drawing_canvas = None
@@ -252,7 +253,8 @@ class VirtualKeyboard:
             "snake": "Snake: Arahkan kepala ular dengan jari, makan makanan, jangan tabrak dinding/tubuh, skor 10 menang.",
             "mole": "Whack A Mole: Ketuk mole yang muncul, 10 hit untuk menang.",
             "balloon": "Balloon Pop: Pecahkan balon yang naik; 10 balon pecah menang.",
-            "flappy": "Flappy: Buka jari (lebih lebar) untuk flap, lewati pipa, skor 10 menang."
+            "flappy": "Flappy: Buka jari (lebih lebar) untuk flap, lewati pipa, skor 10 menang.",
+            "dodge": "Dodge: Geser kiri-kanan hindari meteor, kumpulkan 20 lolos untuk menang."
         }
         return tips.get(self.current_game, "Pilih game, lalu ikuti instruksi di layar.")
 
@@ -292,6 +294,7 @@ class VirtualKeyboard:
             ("Whack A Mole", "mole"),
             ("Balloon Pop", "balloon"),
             ("Flappy Bird", "flappy"),
+            ("Dodge Meteors", "dodge"),
             ("Back", "back")
         ]
         button_width, button_height = 120, 40
@@ -1087,6 +1090,103 @@ class BalloonPopGame:
         cv2.putText(overlay, "Sentuh balon untuk pecahkan. 10 = WIN", (title_x, self.game_area[3] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         if win:
             cv2.putText(overlay, "WIN! Konfeti 10 detik", (title_x + 30, self.game_area[3] - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+class DodgeGame:
+    def __init__(self):
+        self.game_area = (150, 130, 650, 480)
+        self.win_fx = WinCelebration()
+        self.player_width = 70
+        self.player_height = 20
+        self.spawn_interval = 0.9
+        self.speed_range = (4.0, 7.0)
+        self.target_clear = 20
+        self.lives_max = 3
+        self.hand_landmarks = None
+        self.mp_hands = None
+        self.reset()
+
+    def reset(self):
+        self.win = False
+        self.win_fx.reset()
+        self.player_x = (self.game_area[0] + self.game_area[2]) // 2 - self.player_width // 2
+        self.player_y = self.game_area[3] - 40
+        self.obstacles = []
+        self.last_spawn = time.time()
+        self.cleared = 0
+        self.lives = self.lives_max
+
+    def spawn_meteor(self):
+        size = random.randint(18, 36)
+        x = random.randint(self.game_area[0] + size, self.game_area[2] - size)
+        speed = random.uniform(*self.speed_range)
+        color = (
+            random.randint(160, 210),
+            random.randint(150, 200),
+            random.randint(220, 255)
+        )
+        self.obstacles.append({"x": x, "y": self.game_area[1] - size, "size": size, "speed": speed, "color": color})
+
+    def check_collision(self, meteor):
+        px1 = self.player_x
+        px2 = self.player_x + self.player_width
+        py1 = self.player_y
+        py2 = self.player_y + self.player_height
+        mx = meteor["x"]
+        my = meteor["y"]
+        r = meteor["size"]
+        return mx + r > px1 and mx - r < px2 and my + r > py1 and my - r < py2
+
+    def update(self, overlay, finger_pos, typed_text=""):
+        now = time.time()
+        if self.win:
+            self.draw(overlay, win=True)
+            overlay = self.win_fx.draw(overlay, label="DODGE WIN!", subtitle="Konfeti 10 detik sebelum restart")
+            if not self.win_fx.is_active():
+                self.reset()
+            return overlay
+        if finger_pos:
+            self.player_x = max(self.game_area[0], min(self.game_area[2] - self.player_width, finger_pos[0] - self.player_width // 2))
+        if now - self.last_spawn > self.spawn_interval:
+            self.spawn_meteor()
+            self.last_spawn = now
+        for meteor in self.obstacles[:]:
+            meteor["y"] += meteor["speed"]
+            if meteor["y"] - meteor["size"] > self.game_area[3]:
+                self.obstacles.remove(meteor)
+                self.cleared += 1
+                if self.cleared >= self.target_clear and not self.win:
+                    self.win = True
+                    self.win_fx.start(overlay)
+                continue
+            if self.check_collision(meteor):
+                self.obstacles.remove(meteor)
+                self.lives -= 1
+                if self.lives <= 0:
+                    self.reset()
+                    return overlay
+        self.draw(overlay)
+        return overlay
+
+    def draw(self, overlay, win=False):
+        y1, y2 = self.game_area[1], self.game_area[3]
+        x1, x2 = self.game_area[0], self.game_area[2]
+        region = overlay[y1:y2, x1:x2].copy()
+        bg_color = np.array([225, 215, 230], dtype=np.uint8)
+        patch = np.full(region.shape, bg_color, dtype=np.uint8)
+        overlay[y1:y2, x1:x2] = cv2.addWeighted(region, 0.85, patch, 0.15, 0)
+        frame_color = (255, 255, 255)
+        player_color = (240, 170, 60) if not win else (80, 220, 120)
+        text_color = (245, 240, 240)
+        accent_text = (240, 170, 180)
+        info_color = (210, 210, 240)
+        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), frame_color, 2)
+        cv2.rectangle(overlay, (int(self.player_x), int(self.player_y)), (int(self.player_x + self.player_width), int(self.player_y + self.player_height)), player_color, -1)
+        for meteor in self.obstacles:
+            cv2.circle(overlay, (int(meteor["x"]), int(meteor["y"])), meteor["size"], meteor["color"], -1)
+            cv2.circle(overlay, (int(meteor["x"]), int(meteor["y"])), meteor["size"], frame_color, 2)
+        cv2.putText(overlay, f"Lolos: {self.cleared}/{self.target_clear}", (self.game_area[0], self.game_area[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
+        cv2.putText(overlay, f"Nyawa: {self.lives}", (self.game_area[0] + 220, self.game_area[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, accent_text, 2)
+        cv2.putText(overlay, "Geser jari kiri-kanan untuk menghindar", (self.game_area[0], self.game_area[3] + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, info_color, 2)
 
 class FlappyBirdGame:
     def __init__(self):
