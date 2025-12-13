@@ -105,6 +105,7 @@ class VirtualKeyboard:
             "pong": PongGame(),
             "catch": CatchGame(),
             "snake": SnakeGame(),
+            "mole": WhackAMoleGame(),
             "flappy": FlappyBirdGame()
         }
         self.draw_mode = False
@@ -248,6 +249,7 @@ class VirtualKeyboard:
             "pong": "Pong: Gerak paddle dengan jari, pantulkan bola, capai 10 poin untuk WIN.",
             "catch": "Catch: Gerak keranjang, tangkap bola jatuh, hindari miss, 10 poin untuk WIN.",
             "snake": "Snake: Arahkan kepala ular dengan jari, makan makanan, jangan tabrak dinding/tubuh, skor 10 menang.",
+            "mole": "Whack A Mole: Ketuk mole yang muncul, 10 hit untuk menang.",
             "flappy": "Flappy: Buka jari (lebih lebar) untuk flap, lewati pipa, skor 10 menang."
         }
         return tips.get(self.current_game, "Pilih game, lalu ikuti instruksi di layar.")
@@ -285,6 +287,7 @@ class VirtualKeyboard:
             ("Pong", "pong"),
             ("Catch Balls", "catch"),
             ("Snake", "snake"),
+            ("Whack A Mole", "mole"),
             ("Flappy Bird", "flappy"),
             ("Back", "back")
         ]
@@ -764,6 +767,86 @@ class MemoryGame:
             cv2.circle(overlay, (tx, ty), self.target_radius, (255, 255, 255), 2)
         if win:
             cv2.putText(overlay, "WIN! Sentuh untuk reset", (230, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+class WhackAMoleGame:
+    def __init__(self):
+        self.game_area = (200, 150, 600, 450)
+        self.radius = 30
+        self.active_mole = None
+        self.last_spawn = time.time()
+        self.spawn_interval = 1.4
+        self.mole_duration = 1.0
+        self.score = 0
+        self.win = False
+        self.speed_mul = 1.0
+        self.reset()
+
+    def set_difficulty(self, multiplier):
+        self.speed_mul = multiplier
+        self.spawn_interval = max(0.6, 1.4 / multiplier)
+        self.mole_duration = max(0.5, 1.0 / multiplier)
+        self.reset()
+
+    def reset(self):
+        self.score = 0
+        self.win = False
+        self.active_mole = None
+        self.last_spawn = time.time()
+        # Layout holes as a 3x2 grid centered in game_area
+        left, top, right, bottom = self.game_area
+        width = right - left
+        height = bottom - top
+        padding_x = 60
+        padding_y = 100
+        col_spacing = (width - 2 * padding_x) // 2
+        row_spacing = (height - 2 * padding_y)
+        cx0 = left + padding_x
+        cy0 = top + padding_y
+        self.holes = [
+            (cx0 + col_spacing * c, cy0 + row_spacing * r)
+            for r in range(2)
+            for c in range(3)
+        ]
+
+    def spawn_mole(self):
+        self.active_mole = random.choice(self.holes)
+        self.last_spawn = time.time()
+
+    def update(self, overlay, finger_pos, typed_text=""):
+        now = time.time()
+        if self.win:
+            self.draw(overlay, win=True)
+            if finger_pos:
+                self.reset()
+            return overlay
+        if self.active_mole is None or now - self.last_spawn > self.mole_duration:
+            self.spawn_mole()
+        if finger_pos and self.active_mole:
+            dist = math.hypot(finger_pos[0] - self.active_mole[0], finger_pos[1] - self.active_mole[1])
+            if dist <= self.radius:
+                self.score += 1
+                if self.score >= 10:
+                    self.win = True
+                self.active_mole = None
+                self.last_spawn = now
+        self.draw(overlay, win=False)
+        return overlay
+
+    def draw(self, overlay, win=False):
+        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
+        title_x = self.game_area[0] + 20
+        title_y = self.game_area[1] + 30
+        cv2.putText(overlay, "WHACK A MOLE", (title_x, title_y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        cv2.putText(overlay, f"Score: {self.score}", (title_x, title_y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        for hole in self.holes:
+            cv2.circle(overlay, hole, self.radius, (40, 40, 40), -1)
+            cv2.circle(overlay, hole, self.radius, (255, 255, 255), 2)
+        if self.active_mole:
+            cv2.circle(overlay, self.active_mole, self.radius, (0, 200, 255), -1)
+            cv2.circle(overlay, self.active_mole, self.radius, (255, 255, 255), 3)
+        cv2.putText(overlay, "Sentuh mole untuk skor. 10 = WIN", (title_x, self.game_area[3] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        if win:
+            cv2.putText(overlay, "WIN! Sentuh untuk reset", (260, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
 class FlappyBirdGame:
     def __init__(self):
