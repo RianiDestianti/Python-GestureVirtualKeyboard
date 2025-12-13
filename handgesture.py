@@ -473,6 +473,31 @@ class VirtualKeyboard:
         else:
             instructions = "Spread fingers to show keyboard | Point to type | Game or Draw button"
         cv2.putText(overlay, instructions, (10, overlay.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
+        credit_text = "Created by Riani Destanti, Fullstack Developer at Sobat Teknologi"
+        credit_scale = 0.5
+        credit_thickness = 1
+        credit_size = self.get_text_size(credit_text, font_scale=credit_scale, thickness=credit_thickness)
+        padding = 8
+        extra_left = 10
+        box_w = credit_size[0] + padding * 2 + extra_left
+        box_h = credit_size[1] + padding * 2
+        margin = 10
+        credit_x = max(margin, overlay.shape[1] - box_w - margin)
+        credit_y = overlay.shape[0] - box_h - margin
+        shadow_offset = 3
+        box_color = tuple(min(255, c + 40) for c in theme["bg_color"])
+        shadow_color = (0, 0, 0)
+        border_color = theme["border_color"]
+        cv2.rectangle(overlay, (credit_x + shadow_offset, credit_y + shadow_offset), (credit_x + box_w + shadow_offset, credit_y + box_h + shadow_offset), shadow_color, -1)
+        cv2.rectangle(overlay, (credit_x, credit_y), (credit_x + box_w, credit_y + box_h), box_color, -1)
+        cv2.rectangle(overlay, (credit_x, credit_y), (credit_x + box_w, credit_y + box_h), border_color, 1)
+        accent_x = credit_x + 6
+        accent_width = 4
+        accent_color = (0, 0, 255)
+        cv2.rectangle(overlay, (accent_x, credit_y + 4), (accent_x + accent_width, credit_y + box_h - 4), accent_color, -1)
+        text_x = credit_x + padding + extra_left
+        text_y = credit_y + box_h - padding - 2
+        cv2.putText(overlay, credit_text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, credit_scale, theme["text_color"], credit_thickness, cv2.LINE_AA)
 
     async def run(self):
         while self.cap.isOpened():
