@@ -544,14 +544,102 @@ class VirtualKeyboard:
         cv2.destroyAllWindows()
         pygame.mixer.quit()
 
+
+class WinCelebration:
+    """Shared 10s win effect with confetti, glow, and rays."""
+
+    def __init__(self, duration=10.0):
+        self.duration = duration
+        self.active = False
+        self.start_time = 0.0
+        self.confetti = []
+        self.center = (0, 0)
+
+    def reset(self):
+        self.active = False
+        self.confetti = []
+
+    def is_active(self):
+        return self.active and (time.time() - self.start_time) < self.duration
+
+    def _spawn_confetti(self, w, h):
+        self.confetti = []
+        for _ in range(140):
+            self.confetti.append({
+                "pos": [random.randint(0, w), random.randint(-h // 3, h // 4)],
+                "vel": [random.uniform(-1.2, 1.2), random.uniform(3.5, 6.5)],
+                "color": (
+                    random.randint(140, 255),
+                    random.randint(120, 255),
+                    random.randint(140, 255)
+                ),
+                "size": random.randint(6, 12)
+            })
+
+    def start(self, overlay):
+        h, w = overlay.shape[:2]
+        self.center = (w // 2, h // 2)
+        self._spawn_confetti(w, h)
+        self.start_time = time.time()
+        self.active = True
+
+    def draw(self, overlay, label="YOU WIN!", subtitle="Nikmati konfeti 10 detik"):
+        if not self.is_active():
+            self.reset()
+            return overlay
+        progress = (time.time() - self.start_time) / self.duration
+        h, w = overlay.shape[:2]
+        fx_layer = overlay.copy()
+        pulse = 0.5 + 0.5 * math.sin(progress * math.pi * 2)
+        glow_radius = int(max(w, h) * (0.25 + 0.25 * pulse))
+        cv2.circle(fx_layer, self.center, glow_radius, (255, 255, 255), -1)
+        ring_radius = int(max(w, h) * (0.15 + progress * 0.35))
+        cv2.circle(fx_layer, self.center, ring_radius, (255, 215, 0), 6)
+        for c in self.confetti:
+            c["pos"][0] += c["vel"][0] + math.sin(progress * 8 + c["pos"][1] * 0.02)
+            c["pos"][1] += c["vel"][1]
+            if c["pos"][1] > h + 20:
+                c["pos"][0] = random.randint(0, w)
+                c["pos"][1] = random.randint(-h // 5, 0)
+            cv2.circle(fx_layer, (int(c["pos"][0]), int(c["pos"][1])), c["size"], c["color"], -1)
+        beams = 24
+        for i in range(beams):
+            angle = (i / beams) * math.tau
+            length = int((0.35 + 0.4 * pulse) * max(w, h))
+            end_x = int(self.center[0] + math.cos(angle) * length)
+            end_y = int(self.center[1] + math.sin(angle) * length)
+            cv2.line(fx_layer, self.center, (end_x, end_y), (255, 255, 255), 2)
+        overlay = cv2.addWeighted(overlay, 0.55, fx_layer, 0.45, 0)
+        text_scale = 1.8
+        text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, text_scale, 4)[0]
+        text_x = self.center[0] - text_size[0] // 2
+        text_y = self.center[1] - text_size[1] // 2
+        cv2.putText(overlay, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 0, 0), 10)
+        cv2.putText(overlay, label, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 255, 255), 4)
+        sub_scale = 0.9
+        sub_size = cv2.getTextSize(subtitle, cv2.FONT_HERSHEY_SIMPLEX, sub_scale, 2)[0]
+        sub_x = self.center[0] - sub_size[0] // 2
+        sub_y = text_y + 60
+        cv2.putText(overlay, subtitle, (sub_x, sub_y), cv2.FONT_HERSHEY_SIMPLEX, sub_scale, (0, 0, 0), 6)
+        cv2.putText(overlay, subtitle, (sub_x, sub_y), cv2.FONT_HERSHEY_SIMPLEX, sub_scale, (50, 220, 255), 2)
+        timer_left = max(0, int(self.duration - (time.time() - self.start_time)))
+        cv2.putText(overlay, f"Auto reset {timer_left}s", (self.center[0] - 120, sub_y + 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        return overlay
+
+
 class PongGame:
     def __init__(self):
         self.game_area = (100, 100, 700, 500)
+        self.win_fx = WinCelebration()
+        self.win = False
         self.reset()
         self.hand_landmarks = None
         self.mp_hands = None
 
     def reset(self):
+        self.win = False
+        self.win_fx.reset()
         self.paddle_y = 300
         self.ball_x = 400
         self.ball_y = 300
@@ -563,6 +651,12 @@ class PongGame:
         self.ball_size = 15
 
     def update(self, overlay, finger_pos, typed_text=""):
+        if self.win:
+            self.draw(overlay)
+            overlay = self.win_fx.draw(overlay, label="PONG WIN!", subtitle="Konfeti 10 detik sebelum restart")
+            if not self.win_fx.is_active():
+                self.reset()
+            return overlay
         if finger_pos:
             self.paddle_y = max(self.game_area[1], min(self.game_area[3] - self.paddle_height, finger_pos[1] - self.paddle_height // 2))
         self.ball_x += self.ball_dx
@@ -579,6 +673,9 @@ class PongGame:
                 self.ball_y >= self.paddle_y and self.ball_y <= self.paddle_y + self.paddle_height):
             self.ball_dx = -self.ball_dx
             self.score += 1
+            if self.score >= 10 and not self.win:
+                self.win = True
+                self.win_fx.start(overlay)
         self.draw(overlay)
         return overlay
 
@@ -592,11 +689,15 @@ class PongGame:
 class CatchGame:
     def __init__(self):
         self.game_area = (100, 100, 700, 500)
+        self.win_fx = WinCelebration()
+        self.win = False
         self.reset()
         self.hand_landmarks = None
         self.mp_hands = None
 
     def reset(self):
+        self.win = False
+        self.win_fx.reset()
         self.basket_x = 400
         self.basket_width = 80
         self.basket_height = 20
@@ -605,6 +706,12 @@ class CatchGame:
         self.last_spawn = time.time()
 
     def update(self, overlay, finger_pos, typed_text=""):
+        if self.win:
+            self.draw(overlay)
+            overlay = self.win_fx.draw(overlay, label="CATCH WIN!", subtitle="Konfeti 10 detik sebelum restart")
+            if not self.win_fx.is_active():
+                self.reset()
+            return overlay
         if finger_pos:
             self.basket_x = max(self.game_area[0], min(self.game_area[2] - self.basket_width, finger_pos[0] - self.basket_width // 2))
         if time.time() - self.last_spawn > 1.0:
@@ -621,6 +728,9 @@ class CatchGame:
             if ball['y'] >= basket_y and ball['x'] >= self.basket_x and ball['x'] <= self.basket_x + self.basket_width:
                 self.balls.remove(ball)
                 self.score += 1
+                if self.score >= 10 and not self.win:
+                    self.win = True
+                    self.win_fx.start(overlay)
             elif ball['y'] > self.game_area[3]:
                 self.balls.remove(ball)
         self.draw(overlay)
@@ -638,11 +748,15 @@ class SnakeGame:
     def __init__(self):
         self.game_area = (100, 100, 700, 500)
         self.grid_size = 20
+        self.win_fx = WinCelebration()
+        self.win = False
         self.reset()
         self.hand_landmarks = None
         self.mp_hands = None
 
     def reset(self):
+        self.win = False
+        self.win_fx.reset()
         self.snake = [(400, 300), (380, 300), (360, 300)]
         self.direction = (20, 0)
         self.food = self.spawn_food()
@@ -658,6 +772,12 @@ class SnakeGame:
                 return new_food
 
     def update(self, overlay, finger_pos, typed_text=""):
+        if self.win:
+            self.draw(overlay)
+            overlay = self.win_fx.draw(overlay, label="SNAKE WIN!", subtitle="Konfeti 10 detik sebelum restart")
+            if not self.win_fx.is_active():
+                self.reset()
+            return overlay
         if finger_pos and len(self.snake) > 0:
             head_x, head_y = self.snake[0]
             dx = finger_pos[0] - head_x
@@ -676,6 +796,9 @@ class SnakeGame:
             self.snake.insert(0, new_head)
             if abs(new_head[0] - self.food[0]) < self.grid_size and abs(new_head[1] - self.food[1]) < self.grid_size:
                 self.score += 1
+                if self.score >= 10 and not self.win:
+                    self.win = True
+                    self.win_fx.start(overlay)
                 self.food = self.spawn_food()
             else:
                 self.snake.pop()
@@ -706,6 +829,7 @@ class MemoryGame:
         self.last_spawn = 0
         self.score = 0
         self.win = False
+        self.win_fx = WinCelebration()
         self.instructions = [
             "1) Sentuh target bulat yang muncul.",
             "2) Target pindah setiap muncul/hit.",
@@ -719,6 +843,7 @@ class MemoryGame:
     def reset(self):
         self.score = 0
         self.win = False
+        self.win_fx.reset()
         self.last_spawn = time.time()
         self.target_pos = self.random_target()
 
@@ -737,6 +862,9 @@ class MemoryGame:
         now = time.time()
         if self.win:
             self.draw(overlay, win=True)
+            overlay = self.win_fx.draw(overlay, label="TARGET TAP WIN!", subtitle="Konfeti 10 detik")
+            if not self.win_fx.is_active():
+                self.reset()
             return overlay
         if now - self.last_spawn > self.spawn_interval:
             self.target_pos = self.random_target()
@@ -748,6 +876,7 @@ class MemoryGame:
                 self.score += 1
                 if self.score >= 10:
                     self.win = True
+                    self.win_fx.start(overlay)
                 self.target_pos = self.random_target()
                 self.last_spawn = now
         self.draw(overlay, win=False)
@@ -769,11 +898,12 @@ class MemoryGame:
             cv2.circle(overlay, (tx, ty), self.target_radius, self.target_pos["color"], -1)
             cv2.circle(overlay, (tx, ty), self.target_radius, (255, 255, 255), 2)
         if win:
-            cv2.putText(overlay, "WIN! Sentuh untuk reset", (230, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(overlay, "WIN! Konfeti 10 detik", (230, 420), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
 class WhackAMoleGame:
     def __init__(self):
         self.game_area = (200, 150, 600, 450)
+        self.win_fx = WinCelebration()
         self.radius = 30
         self.active_mole = None
         self.last_spawn = time.time()
@@ -793,6 +923,7 @@ class WhackAMoleGame:
     def reset(self):
         self.score = 0
         self.win = False
+        self.win_fx.reset()
         self.active_mole = None
         self.last_spawn = time.time()
         # Layout holes as a 3x2 grid centered in game_area
@@ -819,7 +950,8 @@ class WhackAMoleGame:
         now = time.time()
         if self.win:
             self.draw(overlay, win=True)
-            if finger_pos:
+            overlay = self.win_fx.draw(overlay, label="MOLE WIN!", subtitle="Konfeti 10 detik sebelum ulang")
+            if not self.win_fx.is_active():
                 self.reset()
             return overlay
         if self.active_mole is None or now - self.last_spawn > self.mole_duration:
@@ -830,6 +962,7 @@ class WhackAMoleGame:
                 self.score += 1
                 if self.score >= 10:
                     self.win = True
+                    self.win_fx.start(overlay)
                 self.active_mole = None
                 self.last_spawn = now
         self.draw(overlay, win=False)
@@ -849,11 +982,12 @@ class WhackAMoleGame:
             cv2.circle(overlay, self.active_mole, self.radius, (255, 255, 255), 3)
         cv2.putText(overlay, "Sentuh mole untuk skor. 10 = WIN", (title_x, self.game_area[3] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         if win:
-            cv2.putText(overlay, "WIN! Sentuh untuk reset", (260, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(overlay, "WIN! Konfeti 10 detik", (260, 460), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
 class BalloonPopGame:
     def __init__(self):
         self.game_area = (200, 150, 600, 450)
+        self.win_fx = WinCelebration()
         self.balloons = []
         self.last_spawn = time.time()
         self.spawn_interval = 1.2
@@ -876,6 +1010,7 @@ class BalloonPopGame:
         self.last_spawn = time.time()
         self.score = 0
         self.win = False
+        self.win_fx.reset()
 
     def spawn_balloon(self):
         x = random.randint(self.game_area[0] + self.radius, self.game_area[2] - self.radius)
@@ -892,7 +1027,8 @@ class BalloonPopGame:
         now = time.time()
         if self.win:
             self.draw(overlay, win=True)
-            if finger_pos:
+            overlay = self.win_fx.draw(overlay, label="BALLOON WIN!", subtitle="Konfeti 10 detik sebelum restart")
+            if not self.win_fx.is_active():
                 self.reset()
             return overlay
         if now - self.last_spawn > self.spawn_interval:
@@ -910,6 +1046,7 @@ class BalloonPopGame:
                     self.score += 1
                     if self.score >= 10:
                         self.win = True
+                        self.win_fx.start(overlay)
                     self.balloons.remove(balloon)
         self.draw(overlay, win=False)
         return overlay
@@ -926,7 +1063,7 @@ class BalloonPopGame:
             cv2.circle(overlay, (bx, by + self.radius), int(self.radius * 0.5), balloon["color"], 2)
         cv2.putText(overlay, "Sentuh balon untuk pecahkan. 10 = WIN", (title_x, self.game_area[3] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         if win:
-            cv2.putText(overlay, "WIN! Sentuh untuk reset", (title_x + 30, self.game_area[3] - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(overlay, "WIN! Konfeti 10 detik", (title_x + 30, self.game_area[3] - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
 class FlappyBirdGame:
     def __init__(self):
@@ -941,11 +1078,13 @@ class FlappyBirdGame:
         self.mp_hands = None
         self.max_velocity = 10
         self.win = False
+        self.win_fx = WinCelebration()
         self.pipe_spacing = 220  # minimum horizontal spacing between pipes
         self.reset()
 
     def reset(self):
         self.win = False
+        self.win_fx.reset()
         self.bird_x = self.game_area[0] + 100
         self.bird_y = (self.game_area[1] + self.game_area[3]) // 2
         self.bird_velocity = 0
@@ -955,11 +1094,17 @@ class FlappyBirdGame:
         self.game_over = False
 
     def update(self, overlay, finger_pos, typed_text=""):
-        if self.win or self.game_over:
-            # Allow restart by pointing when win/lose, but keep scene drawn.
+        if self.win:
+            self.draw(overlay)
+            overlay = self.win_fx.draw(overlay, label="FLAPPY WIN!", subtitle="Konfeti 10 detik sebelum restart")
+            if not self.win_fx.is_active():
+                self.reset()
+            return overlay
+        if self.game_over:
+            # Allow restart by pointing when lose, keep scene drawn.
             if finger_pos:
                 self.reset()
-            self.draw(overlay, win=self.win)
+            self.draw(overlay, win=False)
             return overlay
         velocity_change = self.gravity  # default gravity pull
         if self.hand_landmarks and self.mp_hands:
@@ -1011,6 +1156,7 @@ class FlappyBirdGame:
                 self.score += 1
                 if self.score >= 10:
                     self.win = True
+                    self.win_fx.start(overlay)
             elif (pipe['x'] < self.bird_x + self.bird_size and
                   pipe['x'] + self.pipe_width > self.bird_x and
                   (self.bird_y < pipe['gap_y'] - self.gap_size // 2 or
