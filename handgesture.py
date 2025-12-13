@@ -226,6 +226,14 @@ class VirtualKeyboard:
     def calculate_distance(self, point1, point2):
         return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
 
+    def get_game_score(self):
+        if not self.game_mode or self.current_game in (None, "menu"):
+            return None
+        game = self.games.get(self.current_game)
+        if game and hasattr(game, "score"):
+            return game.score
+        return None
+
     def draw_finish_button(self, overlay, finger_pos, game_area):
         theme = self.get_current_theme()
         button_x, button_y = game_area[2] - 100, game_area[1] + 10
@@ -428,7 +436,9 @@ class VirtualKeyboard:
         if self.draw_mode:
             info_text = "DRAW MODE - Use finger to draw, select color, or exit"
         elif self.game_mode:
-            info_text = f"GAME MODE - {self.current_game if self.current_game else 'Menu'}"
+            score = self.get_game_score()
+            score_text = f" | Score: {score}" if score is not None else ""
+            info_text = f"GAME MODE - {self.current_game if self.current_game else 'Menu'}{score_text}"
         else:
             info_text = f"Layout: {self.current_layout} | Theme: {self.current_theme} | Scale: {self.scale_factor:.1f}x"
         cv2.putText(overlay, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_color"], 2)
@@ -754,6 +764,7 @@ class MemoryGame:
         cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
         cv2.putText(overlay, "MEMORY GAME", (250, 200), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
         cv2.putText(overlay, f"Level: {self.score + 1}", (250, 230), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(overlay, f"Score: {self.score}", (250, 255), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         for i, button in enumerate(self.buttons):
             btn_x, btn_y = button["pos"]
             color = button["color"]
