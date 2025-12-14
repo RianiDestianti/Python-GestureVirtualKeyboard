@@ -109,7 +109,8 @@ class VirtualKeyboard:
             "mole": WhackAMoleGame(),
             "balloon": BalloonPopGame(),
             "flappy": FlappyBirdGame(),
-            "dodge": DodgeGame()
+            "dodge": DodgeGame(),
+            "shooter": SpaceShooterGame()
         }
         self.draw_mode = False
         self.drawing_canvas = None
@@ -256,7 +257,8 @@ class VirtualKeyboard:
             "mole": "Whack A Mole: Ketuk mole yang muncul, 10 hit untuk menang.",
             "balloon": "Balloon Pop: Pecahkan balon yang naik; 10 balon pecah menang.",
             "flappy": "Flappy: Buka jari (lebih lebar) untuk flap, lewati pipa, skor 10 menang.",
-            "dodge": "Dodge: Geser kiri-kanan hindari meteor, kumpulkan 20 lolos untuk menang."
+            "dodge": "Dodge: Geser kiri-kanan hindari meteor, kumpulkan 20 lolos untuk menang.",
+            "shooter": "Space Shooter: Geser pesawat kiri-kanan, laser auto menembak meteor, 12 poin menang."
         }
         return tips.get(self.current_game, "Pilih game, lalu ikuti instruksi di layar.")
 
@@ -298,6 +300,7 @@ class VirtualKeyboard:
             ("Balloon Pop", "balloon"),
             ("Flappy Bird", "flappy"),
             ("Dodge Meteors", "dodge"),
+            ("Space Shooter", "shooter"),
             ("Back", "back")
         ]
         button_width, button_height = 120, 40
@@ -1311,6 +1314,141 @@ class DodgeGame:
         cv2.putText(overlay, f"Lolos: {self.cleared}/{self.target_clear}", (self.game_area[0], self.game_area[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
         cv2.putText(overlay, f"Nyawa: {self.lives}", (self.game_area[0] + 220, self.game_area[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, accent_text, 2)
         cv2.putText(overlay, "Geser jari kiri-kanan untuk menghindar", (self.game_area[0], self.game_area[3] + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, info_color, 2)
+
+class SpaceShooterGame:
+    def __init__(self):
+        self.game_area = (140, 120, 660, 480)
+        self.win_fx = WinCelebration()
+        self.hand_landmarks = None
+        self.mp_hands = None
+        self.player_width = 70
+        self.player_height = 24
+        self.laser_speed = 11
+        self.fire_cooldown = 0.28
+        self.spawn_interval = 1.0
+        self.speed_range = (2.8, 4.8)
+        self.target_score = 12
+        self.reset()
+
+    def reset(self):
+        self.win = False
+        self.win_fx.reset()
+        self.player_x = (self.game_area[0] + self.game_area[2]) // 2
+        self.player_y = self.game_area[3] - 40
+        self.lasers = []
+        self.asteroids = []
+        self.last_fire = time.time()
+        self.last_spawn = time.time()
+        self.score = 0
+        self.lives = 3
+
+    def spawn_asteroid(self):
+        size = random.randint(18, 32)
+        x = random.randint(self.game_area[0] + size, self.game_area[2] - size)
+        speed = random.uniform(*self.speed_range)
+        color = (
+            random.randint(150, 220),
+            random.randint(100, 170),
+            random.randint(160, 255)
+        )
+        self.asteroids.append({"x": x, "y": self.game_area[1] - size, "size": size, "speed": speed, "color": color})
+
+    def check_collision_player(self, meteor):
+        px1 = self.player_x - self.player_width // 2
+        px2 = self.player_x + self.player_width // 2
+        py1 = self.player_y - self.player_height
+        py2 = self.player_y + self.player_height // 2
+        mx = meteor["x"]
+        my = meteor["y"]
+        r = meteor["size"]
+        return mx + r > px1 and mx - r < px2 and my + r > py1 and my - r < py2
+
+    def update(self, overlay, finger_pos, typed_text=""):
+        now = time.time()
+        if self.win:
+            self.draw(overlay, win=True)
+            overlay = self.win_fx.draw(overlay, label="SHOOTER WIN!", subtitle="Konfeti 10 detik sebelum restart")
+            if not self.win_fx.is_active():
+                self.reset()
+            return overlay
+        if finger_pos:
+            min_x = self.game_area[0] + self.player_width // 2
+            max_x = self.game_area[2] - self.player_width // 2
+            self.player_x = max(min_x, min(max_x, finger_pos[0]))
+        cooldown = max(0.18, self.fire_cooldown - (self.score * 0.01))
+        if now - self.last_fire > cooldown:
+            self.lasers.append({"x": self.player_x, "y": self.player_y - self.player_height, "speed": self.laser_speed})
+            self.last_fire = now
+        spawn_rate = max(0.55, self.spawn_interval - self.score * 0.03)
+        if now - self.last_spawn > spawn_rate:
+            self.spawn_asteroid()
+            self.last_spawn = now
+        for laser in self.lasers[:]:
+            laser["y"] -= laser["speed"]
+            if laser["y"] < self.game_area[1]:
+                self.lasers.remove(laser)
+        for meteor in self.asteroids[:]:
+            meteor["y"] += meteor["speed"]
+            if meteor["y"] - meteor["size"] > self.game_area[3]:
+                self.asteroids.remove(meteor)
+                self.lives -= 1
+                if self.lives <= 0:
+                    self.reset()
+                    return overlay
+                continue
+            if self.check_collision_player(meteor):
+                self.asteroids.remove(meteor)
+                self.lives -= 1
+                if self.lives <= 0:
+                    self.reset()
+                    return overlay
+        for laser in self.lasers[:]:
+            for meteor in self.asteroids[:]:
+                dist = math.hypot(laser["x"] - meteor["x"], laser["y"] - meteor["y"])
+                if dist <= meteor["size"]:
+                    self.lasers.remove(laser)
+                    self.asteroids.remove(meteor)
+                    self.score += 1
+                    if self.score >= self.target_score and not self.win:
+                        self.win = True
+                        self.win_fx.start(overlay)
+                    break
+        self.draw(overlay)
+        return overlay
+
+    def draw(self, overlay, win=False):
+        x1, y1, x2, y2 = self.game_area
+        region = overlay[y1:y2, x1:x2].copy()
+        space_bg = np.full(region.shape, (25, 30, 60), dtype=np.uint8)
+        overlay[y1:y2, x1:x2] = cv2.addWeighted(region, 0.65, space_bg, 0.35, 0)
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), (255, 255, 255), 2)
+        line_phase = int(time.time() * 80) % max(1, (y2 - y1))
+        for offset in range(0, y2 - y1, 50):
+            y_line = y1 + (line_phase + offset) % (y2 - y1)
+            cv2.line(overlay, (x1, y_line), (x2, y_line), (60, 90, 140), 1)
+        for laser in self.lasers:
+            lx, ly = int(laser["x"]), int(laser["y"])
+            cv2.line(overlay, (lx, ly), (lx, ly - 18), (0, 255, 200), 3)
+            cv2.circle(overlay, (lx, ly - 20), 5, (180, 255, 255), -1)
+        for meteor in self.asteroids:
+            mx, my, size = int(meteor["x"]), int(meteor["y"]), meteor["size"]
+            cv2.circle(overlay, (mx, my), size, meteor["color"], -1)
+            cv2.circle(overlay, (mx, my), size, (255, 255, 255), 2)
+        ship_points = np.array([
+            [int(self.player_x), int(self.player_y - self.player_height)],
+            [int(self.player_x - self.player_width // 2), int(self.player_y + self.player_height // 2)],
+            [int(self.player_x + self.player_width // 2), int(self.player_y + self.player_height // 2)]
+        ])
+        cv2.fillPoly(overlay, [ship_points], (90, 220, 255))
+        cv2.polylines(overlay, [ship_points], True, (255, 255, 255), 2)
+        thruster_y = int(self.player_y + self.player_height // 2)
+        cv2.line(overlay, (int(self.player_x - self.player_width // 4), thruster_y), (int(self.player_x - self.player_width // 4), thruster_y + 16), (0, 160, 255), 4)
+        cv2.line(overlay, (int(self.player_x + self.player_width // 4), thruster_y), (int(self.player_x + self.player_width // 4), thruster_y + 16), (0, 160, 255), 4)
+        cv2.putText(overlay, f"Score: {self.score}/{self.target_score}", (x1 + 10, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(overlay, f"Shield: {self.lives}", (x1 + 230, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 210, 180), 2)
+        cv2.putText(overlay, "Gerak pesawat kiri-kanan | Laser otomatis", (x1 + 10, y2 + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (210, 235, 255), 2)
+        if win:
+            cv2.putText(overlay, "WIN! Konfeti 10 detik", (x1 + 120, y1 + 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
 class FlappyBirdGame:
     def __init__(self):
