@@ -32,19 +32,19 @@ class VirtualKeyboard:
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Photo"]
             ],
             "AZERTY": [
                 ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
                 ["W", "X", "C", "V", "B", "N", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Photo"]
             ],
             "INDONESIA": [
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Photo"]
             ]
         }
         self.current_layout = "QWERTY"
@@ -153,7 +153,15 @@ class VirtualKeyboard:
         self.pushup_angle_smooth = None
         self.pushup_feedback = "Luruskan badan, kamera dari samping"
         self.pushup_last_rep_time = 0
-        self.shortcut_last_touch = {"meme": 0, "pushup": 0}
+        self.photo_mode = False
+        self.photo_pending = False
+        self.photo_capture_time = 0
+        self.photo_countdown_seconds = 3
+        self.photo_last_saved = 0
+        self.photo_cooldown = 4
+        self.photo_status = "Pinch jempol + telunjuk untuk foto"
+        self.photo_save_dir = os.path.join(os.getcwd(), "captures")
+        self.shortcut_last_touch = {"meme": 0, "pushup": 0, "photo": 0}
         self.create_sound_effects()
 
     def create_sound_effects(self):
@@ -209,12 +217,14 @@ class VirtualKeyboard:
         self.draw_mode = False
         self.meme_mode = False
         self.pushup_mode = False
+        self.photo_mode = False
 
     def toggle_draw_mode(self):
         self.draw_mode = not self.draw_mode
         self.game_mode = False
         self.meme_mode = False
         self.pushup_mode = False
+        self.photo_mode = False
         if self.draw_mode:
             h, w = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             self.drawing_canvas = np.zeros((h, w, 3), dtype=np.uint8)
@@ -228,6 +238,7 @@ class VirtualKeyboard:
             self.draw_mode = False
             self.game_mode = False
             self.pushup_mode = False
+            self.photo_mode = False
             self.show_keyboard = False
             self.typed_text = ""
         else:
@@ -240,6 +251,7 @@ class VirtualKeyboard:
             self.draw_mode = False
             self.game_mode = False
             self.meme_mode = False
+            self.photo_mode = False
             self.show_keyboard = False
             self.typed_text = ""
             self.pushup_count = 0
@@ -249,6 +261,21 @@ class VirtualKeyboard:
             self.pushup_last_rep_time = 0
         else:
             self.pushup_feedback = "Nonaktif"
+
+    def toggle_photo_mode(self):
+        self.photo_mode = not self.photo_mode
+        if self.photo_mode:
+            self.draw_mode = False
+            self.game_mode = False
+            self.meme_mode = False
+            self.pushup_mode = False
+            self.show_keyboard = False
+            self.typed_text = ""
+            self.photo_pending = False
+            self.photo_status = "Pinch jempol + telunjuk untuk foto"
+        else:
+            self.photo_pending = False
+            self.photo_status = "Nonaktif"
 
     def get_curved_position(self, base_x, base_y, hand_center, curve_intensity=0.3):
         if hand_center is None:
@@ -296,6 +323,8 @@ class VirtualKeyboard:
             self.toggle_meme_mode()
         elif key == "PushUp":
             self.toggle_pushup_mode()
+        elif key == "Photo":
+            self.toggle_photo_mode()
 
     def get_text_size(self, text, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1, thickness=2):
         return cv2.getTextSize(text, font, font_scale, thickness)[0]
@@ -367,6 +396,17 @@ class VirtualKeyboard:
         y_middle_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_TIP].y
         is_middle_down = y_middle_tip > y_middle_pip
         return distance < max_distance and is_middle_down
+
+    def is_pinch_gesture(self, hand_landmarks, frame_width, frame_height, threshold=45):
+        thumb_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
+        index_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
+        middle_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+        middle_mcp = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
+        thumb = (thumb_tip.x * frame_width, thumb_tip.y * frame_height)
+        index = (index_tip.x * frame_width, index_tip.y * frame_height)
+        distance = self.calculate_distance(thumb, index)
+        middle_folded = middle_tip.y > middle_mcp.y
+        return distance < threshold and middle_folded
 
     def update_meme_state(self, predicted):
         now = time.time()
@@ -477,6 +517,68 @@ class VirtualKeyboard:
             cv2.putText(overlay, f"Tempo terakhir: {tempo:.1f}s", (panel_x + 10, panel_y + 125), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
         return overlay
 
+    def start_photo_countdown(self):
+        self.photo_pending = True
+        self.photo_capture_time = time.time() + self.photo_countdown_seconds
+        self.photo_status = f"Foto dalam {self.photo_countdown_seconds} dtk..."
+
+    def save_photo(self, frame):
+        try:
+            os.makedirs(self.photo_save_dir, exist_ok=True)
+            filename = f"photo_{time.strftime('%Y%m%d_%H%M%S')}.png"
+            path = os.path.join(self.photo_save_dir, filename)
+            cv2.imwrite(path, frame)
+            return path
+        except Exception:
+            return None
+
+    def draw_photo_countdown(self, overlay, remaining):
+        theme = self.get_current_theme()
+        center = (overlay.shape[1] // 2, overlay.shape[0] // 2)
+        radius = 90
+        seconds_left = max(1, math.ceil(remaining))
+        cv2.circle(overlay, center, radius, theme["border_color"], 6)
+        cv2.circle(overlay, center, max(10, int(radius * (remaining / max(self.photo_countdown_seconds, 1)))), theme["key_hover"], 2)
+        cv2.putText(overlay, str(seconds_left), (center[0] - 35, center[1] + 20), cv2.FONT_HERSHEY_SIMPLEX, 2.5, theme["text_active"], 6)
+        cv2.putText(overlay, "Jaga pose", (center[0] - 80, center[1] + 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, theme["text_color"], 2)
+        return overlay
+
+    def draw_photo_panel(self, overlay):
+        theme = self.get_current_theme()
+        panel_w, panel_h = 260, 90
+        margin = 14
+        x = overlay.shape[1] - panel_w - margin
+        y = margin
+        cv2.rectangle(overlay, (x, y), (x + panel_w, y + panel_h), theme["bg_color"], -1)
+        cv2.rectangle(overlay, (x, y), (x + panel_w, y + panel_h), theme["border_color"], 2)
+        cv2.putText(overlay, "PHOTO MODE", (x + 10, y + 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_active"], 2)
+        cv2.putText(overlay, self.photo_status[:32], (x + 10, y + 54), cv2.FONT_HERSHEY_SIMPLEX, 0.6, theme["text_color"], 2)
+        cv2.putText(overlay, "Pinch jempol+telunjuk", (x + 10, y + 78), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
+        return overlay
+
+    def handle_photo_mode(self, display_frame, base_frame, pinch_triggered):
+        if not self.photo_mode:
+            return display_frame
+        now = time.time()
+        if pinch_triggered and not self.photo_pending and now - self.photo_last_saved > self.photo_cooldown:
+            self.start_photo_countdown()
+        remaining = None
+        if self.photo_pending:
+            remaining = self.photo_capture_time - now
+            if remaining <= 0:
+                frame_to_save = base_frame.copy()
+                saved_path = self.save_photo(frame_to_save)
+                self.photo_pending = False
+                self.photo_last_saved = now
+                if saved_path:
+                    self.photo_status = f"Tersimpan: {os.path.basename(saved_path)}"
+                else:
+                    self.photo_status = "Gagal simpan foto"
+        if remaining is not None and remaining > 0:
+            display_frame = self.draw_photo_countdown(display_frame, remaining)
+        display_frame = self.draw_photo_panel(display_frame)
+        return display_frame
+
     def draw_quick_shortcuts(self, overlay, finger_pos):
         theme = self.get_current_theme()
         btn_w, btn_h = 110, 60
@@ -485,7 +587,8 @@ class VirtualKeyboard:
         start_y = max(40, overlay.shape[0] - 120)
         buttons = [
             {"id": "meme", "label": "Meme", "active": self.meme_mode, "action": self.toggle_meme_mode},
-            {"id": "pushup", "label": "Pushup", "active": self.pushup_mode, "action": self.toggle_pushup_mode}
+            {"id": "pushup", "label": "Pushup", "active": self.pushup_mode, "action": self.toggle_pushup_mode},
+            {"id": "photo", "label": "Foto", "active": self.photo_mode, "action": self.toggle_photo_mode}
         ]
         for idx, btn in enumerate(buttons):
             x = start_x + idx * (btn_w + margin)
@@ -701,7 +804,7 @@ class VirtualKeyboard:
                     elif time.time() - self.pressed_time[hand_label] > 0.6:
                         self.key_animations[key] = {'pulse': 1.0, 'active': True, 'start_time': time.time()}
                         self.play_key_sound()
-                        if key in ["Backspace", "Enter", "Space", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]:
+                        if key in ["Backspace", "Enter", "Space", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Photo"]:
                             self.handle_special_keys(key)
                         else:
                             self.typed_text += key
@@ -742,6 +845,8 @@ class VirtualKeyboard:
             info_text = f"MEME MODE - Gesture: {self.meme_current.replace('_', ' ')}"
         elif self.pushup_mode:
             info_text = f"PUSHUP MODE - Hitungan: {self.pushup_count}"
+        elif self.photo_mode:
+            info_text = "PHOTO MODE - Pinch untuk countdown & simpan"
         else:
             info_text = f"Layout: {self.current_layout} | Theme: {self.current_theme} | Scale: {self.scale_factor:.1f}x"
         cv2.putText(overlay, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_color"], 2)
@@ -755,6 +860,8 @@ class VirtualKeyboard:
             instructions = "Meme: thumbs up / pointing / thinking (jari ke hidung) / netral | tekan 'm' untuk toggle"
         elif self.pushup_mode:
             instructions = "Push-up: posisikan kamera samping, tekuk siku <90 lalu luruskan sampai penuh untuk +1"
+        elif self.photo_mode:
+            instructions = "Pinch jempol + telunjuk untuk mulai countdown 3 detik, foto tersimpan otomatis"
         else:
             instructions = "Spread fingers to show keyboard | Point to type | Game or Draw button"
         cv2.putText(overlay, instructions, (10, overlay.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
@@ -799,6 +906,7 @@ class VirtualKeyboard:
             hand_center = None
             finger_pos = None
             primary_hand = None
+            photo_pinch = False
             if results.multi_hand_landmarks:
                 for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
                     if primary_hand is None:
@@ -813,7 +921,7 @@ class VirtualKeyboard:
                     hand_center = ((thumb_x + pinky_x) // 2, (thumb_y + pinky_y) // 2)
                     finger_pos = (int(index_finger_tip.x * w), int(index_finger_tip.y * h))
                     cv2.circle(overlay, finger_pos, 8, (0, 255, 0), -1)
-                    if not self.game_mode and not self.draw_mode and not self.meme_mode and not self.pushup_mode:
+                    if not self.game_mode and not self.draw_mode and not self.meme_mode and not self.pushup_mode and not self.photo_mode:
                         distance = self.calculate_distance((thumb_x, thumb_y), (pinky_x, pinky_y))
                         self.show_keyboard = distance > self.show_threshold
                         if distance < self.hide_threshold:
@@ -822,9 +930,13 @@ class VirtualKeyboard:
                             overlay = self.process_finger_input(overlay, finger_pos[0], finger_pos[1], hand_label, hand_center)
                     elif self.draw_mode:
                         overlay = self.process_drawing(overlay, finger_pos)
+                    elif self.photo_mode:
+                        pass
                     if self.game_mode and self.current_game in self.games:
                         self.games[self.current_game].hand_landmarks = hand_landmarks
                         self.games[self.current_game].mp_hands = self.mp_hands
+                    if self.photo_mode and self.is_pinch_gesture(hand_landmarks, w, h):
+                        photo_pinch = True
             face_landmarks = face_results.multi_face_landmarks[0] if face_results and face_results.multi_face_landmarks else None
             meme_image = None
             if self.meme_mode:
@@ -847,10 +959,12 @@ class VirtualKeyboard:
                     overlay = self.draw_finish_button(overlay, finger_pos, self.games[self.current_game].game_area)
             elif self.pushup_mode:
                 overlay = self.update_pushup_counter(overlay, pose_results.pose_landmarks if pose_results else None, w, h)
+            elif self.photo_mode:
+                pass
             else:
-                if self.show_keyboard and not self.meme_mode:
+                if self.show_keyboard and not self.meme_mode and not self.photo_mode:
                     overlay = self.draw_keyboard(overlay, hand_center)
-                if not self.meme_mode:
+                if not self.meme_mode and not self.photo_mode:
                     self.draw_text_display(overlay)
             overlay = self.draw_quick_shortcuts(overlay, finger_pos)
             self.draw_info_panel(overlay)
@@ -869,6 +983,8 @@ class VirtualKeyboard:
                     cv2.rectangle(display_frame, (x1, 0), (x2 - 1, display_frame.shape[0] - 1), (255, 255, 255), 2)
                 else:
                     cv2.putText(display_frame, "Meme image missing - check JPG files", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            if self.photo_mode:
+                display_frame = self.handle_photo_mode(display_frame, frame, photo_pinch)
             cv2.imshow('Virtual Keyboard', display_frame)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -881,6 +997,8 @@ class VirtualKeyboard:
                 self.toggle_meme_mode()
             elif key == ord('p'):
                 self.toggle_pushup_mode()
+            elif key == ord('f'):
+                self.toggle_photo_mode()
             await asyncio.sleep(1.0 / 60)  
         self.cap.release()
         cv2.destroyAllWindows()
