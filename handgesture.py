@@ -32,19 +32,19 @@ class VirtualKeyboard:
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme", "PushUp"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
             ],
             "AZERTY": [
                 ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
                 ["W", "X", "C", "V", "B", "N", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme", "PushUp"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
             ],
             "INDONESIA": [
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme", "PushUp"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
             ]
         }
         self.current_layout = "QWERTY"
@@ -153,6 +153,7 @@ class VirtualKeyboard:
         self.pushup_angle_smooth = None
         self.pushup_feedback = "Luruskan badan, kamera dari samping"
         self.pushup_last_rep_time = 0
+        self.shortcut_last_touch = {"meme": 0, "pushup": 0}
         self.create_sound_effects()
 
     def create_sound_effects(self):
@@ -295,6 +296,7 @@ class VirtualKeyboard:
             self.toggle_meme_mode()
         elif key == "PushUp":
             self.toggle_pushup_mode()
+        # Quick buttons at top use these toggles too, so no extra handling needed
 
     def get_text_size(self, text, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1, thickness=2):
         return cv2.getTextSize(text, font, font_scale, thickness)[0]
@@ -474,6 +476,38 @@ class VirtualKeyboard:
         if self.pushup_last_rep_time:
             tempo = time.time() - self.pushup_last_rep_time
             cv2.putText(overlay, f"Tempo terakhir: {tempo:.1f}s", (panel_x + 10, panel_y + 125), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
+        return overlay
+
+    def draw_quick_shortcuts(self, overlay, finger_pos):
+        theme = self.get_current_theme()
+        btn_w, btn_h = 110, 60
+        margin = 12
+        start_x = margin
+        # Place above instruction text near bottom, with guard for small frames
+        start_y = max(40, overlay.shape[0] - 120)
+        buttons = [
+            {"id": "meme", "label": "Meme", "active": self.meme_mode, "action": self.toggle_meme_mode},
+            {"id": "pushup", "label": "Pushup", "active": self.pushup_mode, "action": self.toggle_pushup_mode}
+        ]
+        for idx, btn in enumerate(buttons):
+            x = start_x + idx * (btn_w + margin)
+            y = start_y
+            is_touching = finger_pos and self.is_finger_touching(finger_pos[0], finger_pos[1], x, y, btn_w, btn_h)
+            color = theme["key_hover"] if is_touching else theme["key_color"]
+            if btn["active"]:
+                color = theme["key_pressed"]
+            cv2.rectangle(overlay, (x, y), (x + btn_w, y + btn_h), color, -1)
+            cv2.rectangle(overlay, (x, y), (x + btn_w, y + btn_h), theme["border_color"], 2)
+            text_size = self.get_text_size(btn["label"], font_scale=0.8)
+            text_x = x + (btn_w - text_size[0]) // 2
+            text_y = y + (btn_h + text_size[1]) // 2
+            cv2.putText(overlay, btn["label"], (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, theme["text_color"], 2)
+            if is_touching:
+                now = time.time()
+                last = self.shortcut_last_touch.get(btn["id"], 0)
+                if now - last > 0.6:
+                    btn["action"]()
+                    self.shortcut_last_touch[btn["id"]] = now
         return overlay
 
     def get_game_score(self):
@@ -820,6 +854,7 @@ class VirtualKeyboard:
                     overlay = self.draw_keyboard(overlay, hand_center)
                 if not self.meme_mode:
                     self.draw_text_display(overlay)
+            overlay = self.draw_quick_shortcuts(overlay, finger_pos)
             self.draw_info_panel(overlay)
             for key in list(self.key_animations.keys()):
                 self.animate_key_press(key, time.time() - 0.1)
