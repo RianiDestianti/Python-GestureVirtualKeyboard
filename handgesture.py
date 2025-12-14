@@ -7,6 +7,7 @@ import time
 import math
 import pygame
 import random
+import os
 
 try:
     pygame.mixer.init()
@@ -18,7 +19,9 @@ class VirtualKeyboard:
     def __init__(self):
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_face_mesh = mp.solutions.face_mesh
         self.hands = self.mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.7, max_num_hands=2)
+        self.face_mesh = self.mp_face_mesh.FaceMesh(max_num_faces=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
@@ -27,19 +30,19 @@ class VirtualKeyboard:
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme"]
             ],
             "AZERTY": [
                 ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
                 ["W", "X", "C", "V", "B", "N", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme"]
             ],
             "INDONESIA": [
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme"]
             ]
         }
         self.current_layout = "QWERTY"
@@ -127,6 +130,21 @@ class VirtualKeyboard:
         self.brush_size = 5
         self.last_point = None
         self.hand_landmarks = None
+        self.meme_mode = False
+        self.meme_paths = {
+            "THUMBS_UP": "thumbs_up.jpg",
+            "POINTING": "pointing.jpg",
+            "THINKING": "thinking.jpg",
+            "NEUTRAL": "neutral.jpg"
+        }
+        self.meme_images = {}
+        self.meme_current = "NEUTRAL"
+        self.meme_pending = "NEUTRAL"
+        self.meme_last_change = time.time()
+        self.meme_hold_seconds = 0.25
+        self.meme_image_height = None
+        self.meme_image_max_width = None
+        self.meme_width_fraction = 0.35
         self.create_sound_effects()
 
     def create_sound_effects(self):
@@ -180,16 +198,29 @@ class VirtualKeyboard:
         self.game_mode = not self.game_mode
         self.current_game = "menu" if self.game_mode else None
         self.draw_mode = False
+        self.meme_mode = False
 
     def toggle_draw_mode(self):
         self.draw_mode = not self.draw_mode
         self.game_mode = False
+        self.meme_mode = False
         if self.draw_mode:
             h, w = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             self.drawing_canvas = np.zeros((h, w, 3), dtype=np.uint8)
             self.last_point = None
         else:
             self.drawing_canvas = None
+
+    def toggle_meme_mode(self):
+        self.meme_mode = not self.meme_mode
+        if self.meme_mode:
+            self.draw_mode = False
+            self.game_mode = False
+            self.show_keyboard = False
+            self.typed_text = ""
+        else:
+            self.meme_current = "NEUTRAL"
+            self.meme_pending = "NEUTRAL"
 
     def get_curved_position(self, base_x, base_y, hand_center, curve_intensity=0.3):
         if hand_center is None:
@@ -233,12 +264,89 @@ class VirtualKeyboard:
             self.toggle_game_mode()
         elif key == "Draw":
             self.toggle_draw_mode()
+        elif key == "Meme":
+            self.toggle_meme_mode()
 
     def get_text_size(self, text, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1, thickness=2):
         return cv2.getTextSize(text, font, font_scale, thickness)[0]
 
     def calculate_distance(self, point1, point2):
         return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+
+    def load_meme_images(self, target_height, max_width):
+        self.meme_images = {}
+        self.meme_image_height = target_height
+        self.meme_image_max_width = max_width
+        for gesture, filename in self.meme_paths.items():
+            path = os.path.join(os.getcwd(), filename)
+            img = cv2.imread(path)
+            if img is None:
+                continue
+            ratio_h = target_height / img.shape[0]
+            ratio_w = max_width / img.shape[1] if max_width else ratio_h
+            scale = min(ratio_h, ratio_w)
+            width = max(1, int(img.shape[1] * scale))
+            height = max(1, int(img.shape[0] * scale))
+            resized = cv2.resize(img, (width, height))
+            if height != target_height:
+                pad_top = max(0, (target_height - height) // 2)
+                pad_bottom = max(0, target_height - height - pad_top)
+                resized = cv2.copyMakeBorder(resized, pad_top, pad_bottom, 0, 0, cv2.BORDER_CONSTANT, value=(0, 0, 0))
+            self.meme_images[gesture] = resized
+
+    def classify_meme_gesture(self, hand_landmarks):
+        y_thumb_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP].y
+        y_index_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP].y
+        y_middle_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_TIP].y
+        y_ring_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.RING_FINGER_TIP].y
+        y_pinky_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.PINKY_TIP].y
+        y_middle_pip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_PIP].y
+        is_thumb_up = y_thumb_tip < y_middle_pip
+        fingers_down = (y_index_tip > y_middle_pip and y_middle_tip > y_middle_pip and y_ring_tip > y_middle_pip and y_pinky_tip > y_middle_pip)
+        if is_thumb_up and fingers_down:
+            return "THUMBS_UP"
+        index_up = y_index_tip < y_middle_pip
+        others_down = (y_middle_tip > y_middle_pip and y_ring_tip > y_middle_pip and y_pinky_tip > y_middle_pip)
+        thumb_down = y_thumb_tip > y_middle_pip
+        if index_up and others_down and thumb_down:
+            return "POINTING"
+        return "NEUTRAL"
+
+    def is_thinking_gesture(self, hand_landmarks, face_landmarks, frame_width, frame_height):
+        if not hand_landmarks or not face_landmarks:
+            return False
+        index_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
+        nose_tip = face_landmarks.landmark[4]
+        index_x = int(index_tip.x * frame_width)
+        index_y = int(index_tip.y * frame_height)
+        nose_x = int(nose_tip.x * frame_width)
+        nose_y = int(nose_tip.y * frame_height)
+        distance = math.hypot(index_x - nose_x, index_y - nose_y)
+        max_distance = 50
+        y_middle_pip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_PIP].y
+        y_middle_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.MIDDLE_FINGER_TIP].y
+        is_middle_down = y_middle_tip > y_middle_pip
+        return distance < max_distance and is_middle_down
+
+    def update_meme_state(self, predicted):
+        now = time.time()
+        if predicted != self.meme_current:
+            if predicted != self.meme_pending:
+                self.meme_pending = predicted
+                self.meme_last_change = now
+            elif now - self.meme_last_change >= self.meme_hold_seconds:
+                self.meme_current = predicted
+        else:
+            self.meme_pending = self.meme_current
+            self.meme_last_change = now
+
+    def get_meme_image(self, target_height, frame_width):
+        max_width = int(frame_width * self.meme_width_fraction)
+        if (not self.meme_images or
+                self.meme_image_height != target_height or
+                self.meme_image_max_width != max_width):
+            self.load_meme_images(target_height, max_width)
+        return self.meme_images.get(self.meme_current)
 
     def get_game_score(self):
         if not self.game_mode or self.current_game in (None, "menu"):
@@ -470,6 +578,8 @@ class VirtualKeyboard:
             score = self.get_game_score()
             score_text = f" | Score: {score}" if score is not None else ""
             info_text = f"GAME MODE - {self.current_game if self.current_game else 'Menu'}{score_text}"
+        elif self.meme_mode:
+            info_text = f"MEME MODE - Gesture: {self.meme_current.replace('_', ' ')}"
         else:
             info_text = f"Layout: {self.current_layout} | Theme: {self.current_theme} | Scale: {self.scale_factor:.1f}x"
         cv2.putText(overlay, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_color"], 2)
@@ -479,6 +589,8 @@ class VirtualKeyboard:
             instructions = "Menu game: pilih level & game dengan menunjuk."
         elif self.draw_mode:
             instructions = "Point to draw or select color | Exit to return"
+        elif self.meme_mode:
+            instructions = "Meme: thumbs up / pointing / thinking (jari ke hidung) / netral | tekan 'm' untuk toggle"
         else:
             instructions = "Spread fingers to show keyboard | Point to type | Game or Draw button"
         cv2.putText(overlay, instructions, (10, overlay.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
@@ -517,11 +629,15 @@ class VirtualKeyboard:
             h, w, _ = frame.shape
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.hands.process(rgb_frame)
+            face_results = self.face_mesh.process(rgb_frame) if self.meme_mode else None
             overlay = frame.copy()
             hand_center = None
             finger_pos = None
+            primary_hand = None
             if results.multi_hand_landmarks:
                 for hand_idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                    if primary_hand is None:
+                        primary_hand = hand_landmarks
                     hand_label = results.multi_handedness[hand_idx].classification[0].label.lower()
                     self.mp_drawing.draw_landmarks(overlay, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
                     thumb_tip = hand_landmarks.landmark[self.mp_hands.HandLandmark.THUMB_TIP]
@@ -532,7 +648,7 @@ class VirtualKeyboard:
                     hand_center = ((thumb_x + pinky_x) // 2, (thumb_y + pinky_y) // 2)
                     finger_pos = (int(index_finger_tip.x * w), int(index_finger_tip.y * h))
                     cv2.circle(overlay, finger_pos, 8, (0, 255, 0), -1)
-                    if not self.game_mode and not self.draw_mode:
+                    if not self.game_mode and not self.draw_mode and not self.meme_mode:
                         distance = self.calculate_distance((thumb_x, thumb_y), (pinky_x, pinky_y))
                         self.show_keyboard = distance > self.show_threshold
                         if distance < self.hide_threshold:
@@ -544,6 +660,16 @@ class VirtualKeyboard:
                     if self.game_mode and self.current_game in self.games:
                         self.games[self.current_game].hand_landmarks = hand_landmarks
                         self.games[self.current_game].mp_hands = self.mp_hands
+            face_landmarks = face_results.multi_face_landmarks[0] if face_results and face_results.multi_face_landmarks else None
+            meme_image = None
+            if self.meme_mode:
+                predicted = "NEUTRAL"
+                if primary_hand and face_landmarks and self.is_thinking_gesture(primary_hand, face_landmarks, w, h):
+                    predicted = "THINKING"
+                elif primary_hand:
+                    predicted = self.classify_meme_gesture(primary_hand)
+                self.update_meme_state(predicted)
+                meme_image = self.get_meme_image(h, w)
             if self.draw_mode:
                 overlay = self.draw_color_picker(overlay, finger_pos)
                 if self.drawing_canvas is not None:
@@ -555,16 +681,27 @@ class VirtualKeyboard:
                     overlay = self.games[self.current_game].update(overlay, finger_pos, self.typed_text)
                     overlay = self.draw_finish_button(overlay, finger_pos, self.games[self.current_game].game_area)
             else:
-                if self.show_keyboard:
+                if self.show_keyboard and not self.meme_mode:
                     overlay = self.draw_keyboard(overlay, hand_center)
-                self.draw_text_display(overlay)
+                if not self.meme_mode:
+                    self.draw_text_display(overlay)
             self.draw_info_panel(overlay)
             for key in list(self.key_animations.keys()):
                 self.animate_key_press(key, time.time() - 0.1)
                 if key not in self.key_animations:
                     self.key_animations.pop(key, None)
-            frame = cv2.addWeighted(overlay, 0.8, frame, 0.2, 0)
-            cv2.imshow('Virtual Keyboard', frame)
+            display_frame = cv2.addWeighted(overlay, 0.8, frame, 0.2, 0)
+            if self.meme_mode:
+                if meme_image is not None:
+                    target_w = max(80, int(display_frame.shape[1] * self.meme_width_fraction))
+                    meme_scaled = cv2.resize(meme_image, (target_w, display_frame.shape[0]))
+                    x1 = display_frame.shape[1] - target_w
+                    x2 = display_frame.shape[1]
+                    display_frame[:, x1:x2] = meme_scaled
+                    cv2.rectangle(display_frame, (x1, 0), (x2 - 1, display_frame.shape[0] - 1), (255, 255, 255), 2)
+                else:
+                    cv2.putText(display_frame, "Meme image missing - check JPG files", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.imshow('Virtual Keyboard', display_frame)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
@@ -572,9 +709,12 @@ class VirtualKeyboard:
                 self.toggle_game_mode()
             elif key == ord('d'):
                 self.toggle_draw_mode()
+            elif key == ord('m'):
+                self.toggle_meme_mode()
             await asyncio.sleep(1.0 / 60)  
         self.cap.release()
         cv2.destroyAllWindows()
+        self.face_mesh.close()
         pygame.mixer.quit()
 
 
