@@ -20,8 +20,10 @@ class VirtualKeyboard:
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
         self.mp_face_mesh = mp.solutions.face_mesh
+        self.mp_pose = mp.solutions.pose
         self.hands = self.mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.7, max_num_hands=2)
         self.face_mesh = self.mp_face_mesh.FaceMesh(max_num_faces=1, min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self.pose = self.mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5)
         self.cap = cv2.VideoCapture(0)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
@@ -30,19 +32,19 @@ class VirtualKeyboard:
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme", "PushUp"]
             ],
             "AZERTY": [
                 ["A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["Q", "S", "D", "F", "G", "H", "J", "K", "L", "M"],
                 ["W", "X", "C", "V", "B", "N", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme", "PushUp"]
             ],
             "INDONESIA": [
                 ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
                 ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
                 ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "Backspace"],
-                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme"]
+                ["Space", "Enter", "Theme", "Layout", "Size+", "Size-", "Game", "Draw", "Meme", "PushUp"]
             ]
         }
         self.current_layout = "QWERTY"
@@ -145,6 +147,12 @@ class VirtualKeyboard:
         self.meme_image_height = None
         self.meme_image_max_width = None
         self.meme_width_fraction = 0.35
+        self.pushup_mode = False
+        self.pushup_count = 0
+        self.pushup_stage = "start"
+        self.pushup_angle_smooth = None
+        self.pushup_feedback = "Luruskan badan, kamera dari samping"
+        self.pushup_last_rep_time = 0
         self.create_sound_effects()
 
     def create_sound_effects(self):
@@ -199,11 +207,13 @@ class VirtualKeyboard:
         self.current_game = "menu" if self.game_mode else None
         self.draw_mode = False
         self.meme_mode = False
+        self.pushup_mode = False
 
     def toggle_draw_mode(self):
         self.draw_mode = not self.draw_mode
         self.game_mode = False
         self.meme_mode = False
+        self.pushup_mode = False
         if self.draw_mode:
             h, w = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)), int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             self.drawing_canvas = np.zeros((h, w, 3), dtype=np.uint8)
@@ -216,11 +226,28 @@ class VirtualKeyboard:
         if self.meme_mode:
             self.draw_mode = False
             self.game_mode = False
+            self.pushup_mode = False
             self.show_keyboard = False
             self.typed_text = ""
         else:
             self.meme_current = "NEUTRAL"
             self.meme_pending = "NEUTRAL"
+
+    def toggle_pushup_mode(self):
+        self.pushup_mode = not self.pushup_mode
+        if self.pushup_mode:
+            self.draw_mode = False
+            self.game_mode = False
+            self.meme_mode = False
+            self.show_keyboard = False
+            self.typed_text = ""
+            self.pushup_count = 0
+            self.pushup_stage = "start"
+            self.pushup_angle_smooth = None
+            self.pushup_feedback = "Luruskan badan, kamera dari samping"
+            self.pushup_last_rep_time = 0
+        else:
+            self.pushup_feedback = "Nonaktif"
 
     def get_curved_position(self, base_x, base_y, hand_center, curve_intensity=0.3):
         if hand_center is None:
@@ -266,12 +293,24 @@ class VirtualKeyboard:
             self.toggle_draw_mode()
         elif key == "Meme":
             self.toggle_meme_mode()
+        elif key == "PushUp":
+            self.toggle_pushup_mode()
 
     def get_text_size(self, text, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1, thickness=2):
         return cv2.getTextSize(text, font, font_scale, thickness)[0]
 
     def calculate_distance(self, point1, point2):
         return np.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+
+    def calculate_joint_angle(self, a, b, c):
+        a = np.array(a, dtype=np.float32)
+        b = np.array(b, dtype=np.float32)
+        c = np.array(c, dtype=np.float32)
+        ba = a - b
+        bc = c - b
+        denom = max(np.linalg.norm(ba) * np.linalg.norm(bc), 1e-6)
+        cos_angle = np.clip(np.dot(ba, bc) / denom, -1.0, 1.0)
+        return float(np.degrees(np.arccos(cos_angle)))
 
     def load_meme_images(self, target_height, max_width):
         self.meme_images = {}
@@ -347,6 +386,95 @@ class VirtualKeyboard:
                 self.meme_image_max_width != max_width):
             self.load_meme_images(target_height, max_width)
         return self.meme_images.get(self.meme_current)
+
+    def update_pushup_counter(self, overlay, pose_landmarks, frame_width, frame_height):
+        theme = self.get_current_theme()
+        panel_x, panel_y = 20, 60
+        panel_w, panel_h = 310, 140
+        angle = None
+        progress = 0.0
+        draw_points = None
+        if pose_landmarks:
+            self.mp_drawing.draw_landmarks(overlay, pose_landmarks, self.mp_pose.POSE_CONNECTIONS)
+            angles = []
+            for side in ("LEFT", "RIGHT"):
+                shoulder = pose_landmarks.landmark[getattr(self.mp_pose.PoseLandmark, f"{side}_SHOULDER")]
+                elbow = pose_landmarks.landmark[getattr(self.mp_pose.PoseLandmark, f"{side}_ELBOW")]
+                wrist = pose_landmarks.landmark[getattr(self.mp_pose.PoseLandmark, f"{side}_WRIST")]
+                if min(shoulder.visibility, elbow.visibility, wrist.visibility) < 0.5:
+                    continue
+                pts = [
+                    (shoulder.x * frame_width, shoulder.y * frame_height),
+                    (elbow.x * frame_width, elbow.y * frame_height),
+                    (wrist.x * frame_width, wrist.y * frame_height)
+                ]
+                ang = self.calculate_joint_angle(pts[0], pts[1], pts[2])
+                angles.append(ang)
+                if draw_points is None:
+                    draw_points = pts
+            if angles:
+                raw_angle = sum(angles) / len(angles)
+                if self.pushup_angle_smooth is None:
+                    self.pushup_angle_smooth = raw_angle
+                else:
+                    self.pushup_angle_smooth = 0.8 * self.pushup_angle_smooth + 0.2 * raw_angle
+                angle = self.pushup_angle_smooth
+                down_threshold = 95
+                up_threshold = 160
+                if self.pushup_stage == "start":
+                    self.pushup_stage = "up" if angle > down_threshold else "down"
+                if angle < down_threshold:
+                    if self.pushup_stage != "down":
+                        self.pushup_stage = "down"
+                        self.pushup_feedback = "Turun (siku < 90 deg)"
+                elif angle > up_threshold:
+                    if self.pushup_stage == "down":
+                        self.pushup_count += 1
+                        self.pushup_last_rep_time = time.time()
+                        self.pushup_feedback = f"Naik! Hitungan: {self.pushup_count}"
+                    self.pushup_stage = "up"
+                else:
+                    if self.pushup_stage == "down":
+                        self.pushup_feedback = "Luruskan perlahan untuk hitungan"
+                    else:
+                        self.pushup_feedback = "Turun hingga siku cukup menekuk"
+                progress = float(np.clip((angle - down_threshold) / max(up_threshold - down_threshold, 1), 0.0, 1.0))
+            else:
+                self.pushup_angle_smooth = None
+                self.pushup_feedback = "Bahu-siku-pergelangan belum terbaca"
+        else:
+            self.pushup_feedback = "Pose belum terbaca - mundur sedikit"
+        if draw_points:
+            s, e, w = draw_points
+            s = tuple(map(int, s))
+            e = tuple(map(int, e))
+            w = tuple(map(int, w))
+            cv2.line(overlay, s, e, (0, 200, 255), 6)
+            cv2.line(overlay, e, w, (0, 220, 120), 6)
+            cv2.circle(overlay, s, 8, (255, 255, 255), -1)
+            cv2.circle(overlay, e, 10, (0, 180, 255), -1)
+            cv2.circle(overlay, w, 8, (255, 255, 255), -1)
+        cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), theme["bg_color"], -1)
+        cv2.rectangle(overlay, (panel_x, panel_y), (panel_x + panel_w, panel_y + panel_h), theme["border_color"], 2)
+        cv2.putText(overlay, "Push-up Counter", (panel_x + 10, panel_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_active"], 2)
+        cv2.putText(overlay, f"Hitungan: {self.pushup_count}", (panel_x + 10, panel_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_color"], 2)
+        if angle is not None:
+            cv2.putText(overlay, f"Sudut siku: {int(angle)} deg", (panel_x + 10, panel_y + 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, theme["text_color"], 2)
+        else:
+            cv2.putText(overlay, "Sudut siku belum terbaca", (panel_x + 10, panel_y + 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, theme["text_color"], 2)
+        bar_start = (panel_x + 10, panel_y + 90)
+        bar_end = (panel_x + panel_w - 10, panel_y + 110)
+        cv2.rectangle(overlay, bar_start, bar_end, theme["border_color"], 2)
+        fill_w = int((bar_end[0] - bar_start[0] - 2) * progress)
+        fill_w = max(0, fill_w)
+        bar_color = (0, 220, 100) if self.pushup_stage == "up" else (255, 180, 60)
+        cv2.rectangle(overlay, (bar_start[0] + 1, bar_start[1] + 1), (bar_start[0] + 1 + fill_w, bar_end[1] - 1), bar_color, -1)
+        feedback_text = self.pushup_feedback[:42] if len(self.pushup_feedback) > 42 else self.pushup_feedback
+        cv2.putText(overlay, feedback_text, (panel_x + 10, panel_y + panel_h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, theme["text_active"], 2)
+        if self.pushup_last_rep_time:
+            tempo = time.time() - self.pushup_last_rep_time
+            cv2.putText(overlay, f"Tempo terakhir: {tempo:.1f}s", (panel_x + 10, panel_y + 125), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
+        return overlay
 
     def get_game_score(self):
         if not self.game_mode or self.current_game in (None, "menu"):
@@ -580,6 +708,8 @@ class VirtualKeyboard:
             info_text = f"GAME MODE - {self.current_game if self.current_game else 'Menu'}{score_text}"
         elif self.meme_mode:
             info_text = f"MEME MODE - Gesture: {self.meme_current.replace('_', ' ')}"
+        elif self.pushup_mode:
+            info_text = f"PUSHUP MODE - Hitungan: {self.pushup_count}"
         else:
             info_text = f"Layout: {self.current_layout} | Theme: {self.current_theme} | Scale: {self.scale_factor:.1f}x"
         cv2.putText(overlay, info_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, theme["text_color"], 2)
@@ -591,6 +721,8 @@ class VirtualKeyboard:
             instructions = "Point to draw or select color | Exit to return"
         elif self.meme_mode:
             instructions = "Meme: thumbs up / pointing / thinking (jari ke hidung) / netral | tekan 'm' untuk toggle"
+        elif self.pushup_mode:
+            instructions = "Push-up: posisikan kamera samping, tekuk siku <90 lalu luruskan sampai penuh untuk +1"
         else:
             instructions = "Spread fingers to show keyboard | Point to type | Game or Draw button"
         cv2.putText(overlay, instructions, (10, overlay.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, theme["text_color"], 1)
@@ -630,6 +762,7 @@ class VirtualKeyboard:
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = self.hands.process(rgb_frame)
             face_results = self.face_mesh.process(rgb_frame) if self.meme_mode else None
+            pose_results = self.pose.process(rgb_frame) if self.pushup_mode else None
             overlay = frame.copy()
             hand_center = None
             finger_pos = None
@@ -648,7 +781,7 @@ class VirtualKeyboard:
                     hand_center = ((thumb_x + pinky_x) // 2, (thumb_y + pinky_y) // 2)
                     finger_pos = (int(index_finger_tip.x * w), int(index_finger_tip.y * h))
                     cv2.circle(overlay, finger_pos, 8, (0, 255, 0), -1)
-                    if not self.game_mode and not self.draw_mode and not self.meme_mode:
+                    if not self.game_mode and not self.draw_mode and not self.meme_mode and not self.pushup_mode:
                         distance = self.calculate_distance((thumb_x, thumb_y), (pinky_x, pinky_y))
                         self.show_keyboard = distance > self.show_threshold
                         if distance < self.hide_threshold:
@@ -680,6 +813,8 @@ class VirtualKeyboard:
                 elif self.current_game in self.games:
                     overlay = self.games[self.current_game].update(overlay, finger_pos, self.typed_text)
                     overlay = self.draw_finish_button(overlay, finger_pos, self.games[self.current_game].game_area)
+            elif self.pushup_mode:
+                overlay = self.update_pushup_counter(overlay, pose_results.pose_landmarks if pose_results else None, w, h)
             else:
                 if self.show_keyboard and not self.meme_mode:
                     overlay = self.draw_keyboard(overlay, hand_center)
@@ -711,10 +846,13 @@ class VirtualKeyboard:
                 self.toggle_draw_mode()
             elif key == ord('m'):
                 self.toggle_meme_mode()
+            elif key == ord('p'):
+                self.toggle_pushup_mode()
             await asyncio.sleep(1.0 / 60)  
         self.cap.release()
         cv2.destroyAllWindows()
         self.face_mesh.close()
+        self.pose.close()
         pygame.mixer.quit()
 
 
