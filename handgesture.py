@@ -296,7 +296,6 @@ class VirtualKeyboard:
             self.toggle_meme_mode()
         elif key == "PushUp":
             self.toggle_pushup_mode()
-        # Quick buttons at top use these toggles too, so no extra handling needed
 
     def get_text_size(self, text, font=cv2.FONT_HERSHEY_SIMPLEX, font_scale=1, thickness=2):
         return cv2.getTextSize(text, font, font_scale, thickness)[0]
@@ -483,7 +482,6 @@ class VirtualKeyboard:
         btn_w, btn_h = 110, 60
         margin = 12
         start_x = margin
-        # Place above instruction text near bottom, with guard for small frames
         start_y = max(40, overlay.shape[0] - 120)
         buttons = [
             {"id": "meme", "label": "Meme", "active": self.meme_mode, "action": self.toggle_meme_mode},
