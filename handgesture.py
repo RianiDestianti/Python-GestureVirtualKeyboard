@@ -103,6 +103,7 @@ class VirtualKeyboard:
         self.current_game = None
         self.games = {
             "pong": PongGame(),
+            "brick": BrickBreakerGame(),
             "catch": CatchGame(),
             "snake": SnakeGame(),
             "mole": WhackAMoleGame(),
@@ -249,6 +250,7 @@ class VirtualKeyboard:
     def get_game_instructions(self):
         tips = {
             "pong": "Pong: Gerak paddle dengan jari, pantulkan bola, capai 10 poin untuk WIN.",
+            "brick": "Brick Breaker: Gerak paddle, pantulkan bola, hancurkan semua brick sebelum nyawa habis.",
             "catch": "Catch: Gerak keranjang, tangkap bola jatuh, hindari miss, 10 poin untuk WIN.",
             "snake": "Snake: Arahkan kepala ular dengan jari, makan makanan, jangan tabrak dinding/tubuh, skor 10 menang.",
             "mole": "Whack A Mole: Ketuk mole yang muncul, 10 hit untuk menang.",
@@ -289,6 +291,7 @@ class VirtualKeyboard:
         cv2.putText(overlay, title, (title_x, menu_y + 50), cv2.FONT_HERSHEY_SIMPLEX, 1.2, theme["text_active"], 3)
         games_list = [
             ("Pong", "pong"),
+            ("Brick Breaker", "brick"),
             ("Catch Balls", "catch"),
             ("Snake", "snake"),
             ("Whack A Mole", "mole"),
@@ -712,6 +715,127 @@ class PongGame:
         cv2.rectangle(overlay, (paddle_x, self.paddle_y), (paddle_x + self.paddle_width, self.paddle_y + self.paddle_height), (0, 255, 0), -1)
         cv2.circle(overlay, (int(self.ball_x), int(self.ball_y)), self.ball_size, (255, 255, 0), -1)
         cv2.putText(overlay, f"Score: {self.score}", (self.game_area[0], self.game_area[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+
+class BrickBreakerGame:
+    def __init__(self):
+        self.game_area = (120, 120, 680, 480)
+        self.win_fx = WinCelebration()
+        self.hand_landmarks = None
+        self.mp_hands = None
+        self.paddle_width = 120
+        self.paddle_height = 18
+        self.ball_radius = 10
+        self.base_speed = 5.0
+        self.rows = 4
+        self.cols = 7
+        self.brick_height = 22
+        self.brick_padding = 8
+        self.brick_top_padding = 16
+        self.reset()
+
+    def reset(self):
+        self.win = False
+        self.win_fx.reset()
+        self.score = 0
+        self.lives = 3
+        self.paddle_x = (self.game_area[0] + self.game_area[2]) // 2 - self.paddle_width // 2
+        self.paddle_y = self.game_area[3] - 40
+        self.ball_x = float(self.paddle_x + self.paddle_width // 2)
+        self.ball_y = float(self.paddle_y - 30)
+        self.ball_dx = random.choice([-1, 1]) * self.base_speed
+        self.ball_dy = -self.base_speed
+        self.bricks = self._build_bricks()
+
+    def _build_bricks(self):
+        bricks = []
+        left, top, right, _ = self.game_area
+        area_width = right - left
+        brick_width = int((area_width - (self.cols + 1) * self.brick_padding) / self.cols)
+        for row in range(self.rows):
+            for col in range(self.cols):
+                x1 = left + self.brick_padding + col * (brick_width + self.brick_padding)
+                y1 = top + self.brick_top_padding + row * (self.brick_height + self.brick_padding)
+                bricks.append({
+                    "rect": (x1, y1, x1 + brick_width, y1 + self.brick_height),
+                    "color": (random.randint(120, 255), random.randint(150, 255), random.randint(150, 255))
+                })
+        return bricks
+
+    def _bounce_from_brick(self, brick):
+        x1, y1, x2, y2 = brick["rect"]
+        overlap_left = self.ball_x + self.ball_radius - x1
+        overlap_right = x2 - (self.ball_x - self.ball_radius)
+        overlap_top = self.ball_y + self.ball_radius - y1
+        overlap_bottom = y2 - (self.ball_y - self.ball_radius)
+        min_overlap = min(overlap_left, overlap_right, overlap_top, overlap_bottom)
+        if min_overlap in (overlap_left, overlap_right):
+            self.ball_dx = -self.ball_dx
+        else:
+            self.ball_dy = -self.ball_dy
+
+    def _reset_ball(self):
+        self.ball_x = self.paddle_x + self.paddle_width // 2
+        self.ball_y = self.paddle_y - 30
+        self.ball_dx = random.choice([-1, 1]) * self.base_speed
+        self.ball_dy = -self.base_speed
+
+    def update(self, overlay, finger_pos, typed_text=""):
+        if self.win:
+            self.draw(overlay, win=True)
+            overlay = self.win_fx.draw(overlay, label="BRICK WIN!", subtitle="Konfeti 10 detik sebelum restart")
+            if not self.win_fx.is_active():
+                self.reset()
+            return overlay
+        if finger_pos:
+            self.paddle_x = max(self.game_area[0], min(self.game_area[2] - self.paddle_width, finger_pos[0] - self.paddle_width // 2))
+        self.ball_x += self.ball_dx
+        self.ball_y += self.ball_dy
+        left, top, right, bottom = self.game_area
+        if self.ball_x - self.ball_radius <= left or self.ball_x + self.ball_radius >= right:
+            self.ball_dx = -self.ball_dx
+        if self.ball_y - self.ball_radius <= top:
+            self.ball_dy = -self.ball_dy
+        paddle_x2 = self.paddle_x + self.paddle_width
+        if (self.ball_y + self.ball_radius >= self.paddle_y and
+                self.ball_y - self.ball_radius <= self.paddle_y + self.paddle_height and
+                self.ball_x >= self.paddle_x and self.ball_x <= paddle_x2 and self.ball_dy > 0):
+            self.ball_y = self.paddle_y - self.ball_radius
+            self.ball_dy = -abs(self.ball_dy)
+            offset = (self.ball_x - (self.paddle_x + self.paddle_width / 2)) / (self.paddle_width / 2)
+            self.ball_dx = max(-self.base_speed * 1.5, min(self.base_speed * 1.5, self.base_speed * offset * 1.4))
+        for brick in self.bricks[:]:
+            x1, y1, x2, y2 = brick["rect"]
+            if (self.ball_x + self.ball_radius > x1 and self.ball_x - self.ball_radius < x2 and
+                    self.ball_y + self.ball_radius > y1 and self.ball_y - self.ball_radius < y2):
+                self.bricks.remove(brick)
+                self.score += 1
+                self._bounce_from_brick(brick)
+                break
+        if not self.bricks and not self.win:
+            self.win = True
+            self.win_fx.start(overlay)
+        if self.ball_y - self.ball_radius > bottom:
+            self.lives -= 1
+            if self.lives <= 0:
+                self.reset()
+                return overlay
+            self._reset_ball()
+        self.draw(overlay)
+        return overlay
+
+    def draw(self, overlay, win=False):
+        cv2.rectangle(overlay, (self.game_area[0], self.game_area[1]), (self.game_area[2], self.game_area[3]), (255, 255, 255), 2)
+        cv2.rectangle(overlay, (self.paddle_x, self.paddle_y), (self.paddle_x + self.paddle_width, self.paddle_y + self.paddle_height), (120, 200, 255), -1)
+        cv2.circle(overlay, (int(self.ball_x), int(self.ball_y)), self.ball_radius, (255, 220, 120), -1)
+        for brick in self.bricks:
+            x1, y1, x2, y2 = brick["rect"]
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), brick["color"], -1)
+            cv2.rectangle(overlay, (x1, y1), (x2, y2), (255, 255, 255), 1)
+        cv2.putText(overlay, f"Score: {self.score}", (self.game_area[0], self.game_area[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.putText(overlay, f"Nyawa: {self.lives}", (self.game_area[0] + 200, self.game_area[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 200), 2)
+        cv2.putText(overlay, "Pindah paddle dengan jari, hancurkan semua brick", (self.game_area[0], self.game_area[3] + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 220, 255), 2)
+        if win:
+            cv2.putText(overlay, "WIN! Konfeti 10 detik", (self.game_area[0] + 160, self.game_area[1] + 200), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 3)
 
 class CatchGame:
     def __init__(self):
