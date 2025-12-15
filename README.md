@@ -50,7 +50,5 @@ Aplikasi ini memungkinkan pengguna mengetik, bermain game, menggambar, mengambil
 
 ## 📦 Instalasi (Setelah Clone)
 
-### 1️⃣ Clone Repository
 ```bash
-git clone https://github.com/RianiDestanti/Python-GestureVirtualKeyboard.git
-cd Python-GestureVirtualKeyboard
+pip install opencv-python mediapipe numpy pygame
